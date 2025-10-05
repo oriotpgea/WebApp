@@ -16,7 +16,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'galleryView'];
+const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'activityLogView'];
 function showView(viewId) {
     views.forEach(id => {
         const el = document.getElementById(id);
@@ -31,9 +31,13 @@ let currentEventId = null;
 let currentUserRole = null;
 let currentUserId = null;
 let participantListenerUnsub = null;
+let activityLogUnsub = null;
+let unsubscribeDashboard = null;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
+    if (activityLogUnsub) { activityLogUnsub(); activityLogUnsub = null; }
+    if (unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
 
     if (user) {
         currentUserId = user.uid;
@@ -102,7 +106,7 @@ function initOrganizerHomeView(user) {
             const event = doc.data();
             const eventCard = document.createElement('div');
             eventCard.className = 'p-4 bg-white rounded-lg shadow-md flex justify-between items-center';
-            eventCard.innerHTML = `<div><h3 class="font-bold text-lg">${event.name}</h3><p class="text-sm text-indigo-600 font-semibold">Codice: ${event.joinCode}</p><p class="text-xs text-gray-500 mt-1">Stato: <span class="font-medium ${event.status === 'active' ? 'text-green-500' : event.status === 'finished' ? 'text-gray-500' : 'text-yellow-500'}">${event.status}</span></p></div><div class="flex items-center space-x-2"><button class="manage-event-btn bg-blue-500 text-white px-3 py-2 rounded-md hover:bg-blue-600 text-sm font-semibold">Gestisci</button><button class="delete-event-btn bg-red-600 text-white p-2 rounded-full hover:bg-red-700"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>`;
+            eventCard.innerHTML = `<div><h3 class="font-bold text-lg">${event.name}</h3><p class="text-sm font-semibold" style="color: var(--primary-green);">Codice: ${event.joinCode}</p><p class="text-xs text-gray-500 mt-1">Stato: <span class="font-medium ${event.status === 'active' ? 'text-green-500' : event.status === 'finished' ? 'text-gray-500' : 'text-yellow-500'}">${event.status}</span></p></div><div class="flex items-center space-x-2"><button class="manage-event-btn bg-blue-500 text-white px-3 py-2 rounded-md hover:bg-blue-600 text-sm font-semibold">Gestisci</button><button class="delete-event-btn bg-red-600 text-white p-2 rounded-full hover:bg-red-700"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>`;
             eventCard.querySelector('.manage-event-btn').onclick = () => { currentEventId = doc.id; initOrganizerDashboardView(); };
             eventCard.querySelector('.delete-event-btn').onclick = () => deleteEvent(doc.id, event.name);
             eventsList.appendChild(eventCard);
@@ -116,10 +120,16 @@ async function deleteEvent(eventId, eventName) {
     showModal("Conferma Eliminazione", `Sei sicuro di voler eliminare l'evento "${eventName}"? TUTTI i dati verranno cancellati per sempre.`, true, async () => {
         try {
             const batch = writeBatch(db);
-            const [checkpointsSnapshot, teamsSnapshot, submissionsSnapshot] = await Promise.all([getDocs(collection(db, `events/${eventId}/checkpoints`)), getDocs(collection(db, `events/${eventId}/teams`)), getDocs(query(collection(db, "submissions"), where("eventId", "==", eventId)))]);
+            const [checkpointsSnapshot, teamsSnapshot, submissionsSnapshot, activitySnapshot] = await Promise.all([ 
+                getDocs(collection(db, `events/${eventId}/checkpoints`)), 
+                getDocs(collection(db, `events/${eventId}/teams`)),
+                getDocs(query(collection(db, "submissions"), where("eventId", "==", eventId))),
+                getDocs(collection(db, `events/${eventId}/activity`))
+            ]);
             checkpointsSnapshot.forEach(doc => batch.delete(doc.ref));
             teamsSnapshot.forEach(doc => batch.delete(doc.ref));
             submissionsSnapshot.forEach(doc => batch.delete(doc.ref));
+            activitySnapshot.forEach(doc => batch.delete(doc.ref));
             batch.delete(doc(db, "events", eventId));
             await batch.commit();
             showModal("Successo", `Evento "${eventName}" eliminato.`);
@@ -138,11 +148,11 @@ document.getElementById('createEventForm').addEventListener('submit', async (e) 
 document.getElementById('logout-organizer-home').addEventListener('click', () => signOut(auth));
 
 async function initOrganizerDashboardView() { showView('organizerDashboardView'); setupDashboardListener(); }
-let unsubscribeDashboard;
+
 async function setupDashboardListener() {
-    if (unsubscribeDashboard) unsubscribeDashboard();
+    if(unsubscribeDashboard) unsubscribeDashboard();
     const eventRef = doc(db, "events", currentEventId);
-    unsubscribeDashboard = onSnapshot(eventRef, async () => {
+    unsubscribeDashboard = onSnapshot(eventRef, async () => { 
         try {
             const [eventDoc, teamsSnapshot, checkpointsSnapshot, submissionsSnapshot] = await Promise.all([
                 getDoc(eventRef),
@@ -150,13 +160,15 @@ async function setupDashboardListener() {
                 getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"))),
                 getDocs(query(collection(db, "submissions"), where("eventId", "==", currentEventId)))
             ]);
-            const eventData = eventDoc.data();
-            renderOrganizerUI(
-                eventData,
-                teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                submissionsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
-            );
+            if (eventDoc.exists()) {
+                const eventData = eventDoc.data();
+                renderOrganizerUI(
+                    eventData,
+                    teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                    checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                    submissionsSnapshot.docs.map(doc => ({id: doc.id, ...doc.data()}))
+                );
+            }
         } catch (error) { showModal("Errore Dashboard", "Impossibile caricare i dati: " + error.message); }
     });
 }
@@ -168,7 +180,7 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
     organizerGrid.innerHTML = tableHtml + '</tbody>';
     const teamScores = {};
     teams.forEach(team => { teamScores[team.id] = { name: team.name, score: 0, completed: 0 }; });
-
+    
     submissions.forEach(sub => {
         if (!sub.teamId || !teamScores[sub.teamId]) return;
         const checkpoint = checkpoints.find(c => c.id === sub.checkpointId);
@@ -177,13 +189,13 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
         if (!checkpoint || typeof checkpoint.correctAnswer === 'undefined') return;
 
         const isCorrect = checkpoint.correctAnswer.toLowerCase().trim() === sub.answer.toLowerCase().trim();
-        if (isCorrect) {
-            teamScores[sub.teamId].score += (checkpoint.points || 0);
+        if (isCorrect) { 
+            teamScores[sub.teamId].score += (checkpoint.points || 0); 
             const eventStartTime = eventData.startTime?.toDate();
-            if (eventStartTime && checkpoint.timeBonus > 0) {
+            if(eventStartTime && checkpoint.timeBonus > 0) {
                 const submissionTime = sub.timestamp.toDate();
                 const timeDiffMinutes = (submissionTime - eventStartTime) / 60000;
-                if (timeDiffMinutes <= checkpoint.timeBonus) {
+                if(timeDiffMinutes <= checkpoint.timeBonus) {
                     teamScores[sub.teamId].score += (checkpoint.bonusPoints || 0);
                 }
             }
@@ -191,82 +203,134 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
         const cell = document.getElementById(`cell-${sub.teamId}-${sub.checkpointId}`);
         if (cell) {
             cell.innerHTML = `<div class="flex flex-col items-center cursor-pointer" title="Clicca per i dettagli">
-                        ${isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600 mx-auto"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500 mx-auto"></i>'}
-                        <i data-lucide="camera" class="w-4 h-4 text-gray-400 hover:text-blue-500 mt-1"></i>
-                    </div>`;
+                ${isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600 mx-auto"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500 mx-auto"></i>'}
+                <i data-lucide="camera" class="w-4 h-4 text-gray-400 hover:text-blue-500 mt-1"></i>
+            </div>`;
             cell.querySelector('div').addEventListener('click', () => showSubmissionDetail(sub, checkpoint, isCorrect, teams.find(t => t.id === sub.teamId)));
         }
     });
     const leaderboardBody = document.getElementById('leaderboardBody');
     const sortedTeams = Object.values(teamScores).sort((a, b) => b.score - a.score);
     leaderboardBody.innerHTML = sortedTeams.map((team, index) => `<tr class="border-b ${index === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${index + 1}</td><td class="p-2">${team.name}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`).join('');
-
-    const galleryBtn = document.getElementById('galleryBtn');
-    galleryBtn.disabled = eventData.status !== 'finished';
-    galleryBtn.title = eventData.status !== 'finished' ? "Disponibile al termine della gara" : "Vedi galleria foto";
-    galleryBtn.classList.toggle('opacity-50', eventData.status !== 'finished');
-    galleryBtn.classList.toggle('cursor-not-allowed', eventData.status !== 'finished');
-
+    
     lucide.createIcons();
 }
 
-document.getElementById('exportCsvBtn').addEventListener('click', () => { /* ... unchanged ... */ });
-document.getElementById('backToOrganizerHome').addEventListener('click', () => { if (unsubscribeDashboard) unsubscribeDashboard(); currentEventId = null; showView('organizerHomeView'); });
+document.getElementById('exportCsvBtn').addEventListener('click', () => { /* ... logica futura ... */ });
+document.getElementById('backToOrganizerHome').addEventListener('click', () => { if(unsubscribeDashboard) unsubscribeDashboard(); currentEventId = null; showView('organizerHomeView'); });
 
 document.getElementById('startEventBtn').addEventListener('click', () => {
     showModal("Conferma Avvio", "Sei sicuro di voler avviare la gara? Verrà registrato l'orario di inizio per i bonus a tempo.", true, async () => {
-        if (!currentEventId) return;
+        if(!currentEventId) return;
         await updateDoc(doc(db, "events", currentEventId), { status: 'active', startTime: new Date() });
         showModal("Successo", "Evento avviato!");
     });
 });
 document.getElementById('finishEventBtn').addEventListener('click', () => {
     showModal("Conferma Termine", "Sei sicuro di voler terminare la gara?", true, async () => {
-        if (!currentEventId) return;
+        if(!currentEventId) return;
         await updateDoc(doc(db, "events", currentEventId), { status: 'finished' });
         showModal("Successo", "Evento terminato!");
     });
 });
 
-document.getElementById('galleryBtn').addEventListener('click', async () => {
-    const galleryGrid = document.getElementById('galleryGrid');
-    galleryGrid.innerHTML = '<i data-lucide="loader-2" class="w-16 h-16 animate-spin text-indigo-600 mx-auto col-span-full"></i>';
-    lucide.createIcons();
-    showView('galleryView');
-    try {
-        const teamsQuery = collection(db, `events/${currentEventId}/teams`);
-        const checkpointsQuery = query(collection(db, `events/${currentEventId}/checkpoints`));
-        const submissionsQuery = query(collection(db, "submissions"), where("eventId", "==", currentEventId), orderBy("timestamp", "desc"));
+document.getElementById('activityLogBtn').addEventListener('click', () => initActivityLogView());
+document.getElementById('backToDashboardFromLog').addEventListener('click', () => {
+    if (activityLogUnsub) {
+        activityLogUnsub();
+        activityLogUnsub = null;
+    }
+    showView('organizerDashboardView');
+});
 
-        const [teamsSnapshot, checkpointsSnapshot, submissionsSnapshot] = await Promise.all([getDocs(teamsQuery), getDocs(checkpointsQuery), getDocs(submissionsQuery)]);
+async function initActivityLogView() {
+    if (activityLogUnsub) activityLogUnsub();
+    
+    const logContainer = document.getElementById('activityLogContainer');
+    logContainer.innerHTML = '<i data-lucide="loader-2" class="w-12 h-12 animate-spin text-green-700 mx-auto"></i>';
+    lucide.createIcons();
+    showView('activityLogView');
+
+    try {
+        const [teamsSnapshot, checkpointsSnapshot] = await Promise.all([
+            getDocs(collection(db, `events/${currentEventId}/teams`)),
+            getDocs(collection(db, `events/${currentEventId}/checkpoints`))
+        ]);
 
         const teamsMap = new Map();
-        teamsSnapshot.forEach(doc => teamsMap.set(doc.id, doc.data().name));
+        teamsSnapshot.forEach(doc => teamsMap.set(doc.id, doc.data()));
         const checkpointsMap = new Map();
-        checkpointsSnapshot.forEach(doc => checkpointsMap.set(doc.id, doc.data().number));
+        checkpointsSnapshot.forEach(doc => checkpointsMap.set(doc.id, doc.data()));
 
-        galleryGrid.innerHTML = '';
-        if (submissionsSnapshot.empty) {
-            galleryGrid.innerHTML = '<p class="col-span-full text-center">Nessuna foto inviata durante questo evento.</p>';
-            return;
-        }
-        submissionsSnapshot.forEach(doc => {
-            const sub = doc.data();
-            const checkpointNumber = checkpointsMap.get(sub.checkpointId) || '?';
-            const teamName = teamsMap.get(sub.teamId) || 'Squadra Sconosciuta';
-            const imgCard = document.createElement('div');
-            imgCard.className = 'bg-white p-2 rounded-lg shadow-md';
-            imgCard.innerHTML = `<img src="${sub.photoUrl}" class="w-full h-48 object-cover rounded-md" alt="Foto di squadra"><div class="mt-1 text-xs"><p class="font-semibold text-gray-800">${teamName}</p><p class="text-gray-500">Punto #${checkpointNumber}</p></div>`;
-            galleryGrid.appendChild(imgCard);
+        const q = query(collection(db, `events/${currentEventId}/activity`), orderBy("timestamp", "desc"));
+        
+        activityLogUnsub = onSnapshot(q, (snapshot) => {
+            if (snapshot.empty) {
+                logContainer.innerHTML = '<p class="text-center text-gray-500">Nessuna attività registrata per questo evento.</p>';
+                return;
+            }
+
+            logContainer.innerHTML = '';
+            snapshot.forEach(doc => {
+                const log = doc.data();
+                const team = teamsMap.get(log.teamId);
+                const checkpoint = checkpointsMap.get(log.checkpointId);
+                
+                const time = log.timestamp.toDate().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                const teamName = team ? team.name : 'Squadra Sconosciuta';
+                const checkpointNumber = checkpoint ? checkpoint.number : '?';
+
+                const logElement = document.createElement('div');
+                logElement.className = 'p-4 border rounded-lg flex items-start space-x-4';
+
+                if (log.type === 'submit') {
+                    const isCorrect = checkpoint && checkpoint.correctAnswer.toLowerCase().trim() === log.answer.toLowerCase().trim();
+                    logElement.innerHTML = `
+                        <div>${isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500"></i>'}</div>
+                        <div class="flex-grow">
+                            <p class="font-bold">${time} - ${teamName} <span class="font-normal text-gray-600">ha risposto al punto #${checkpointNumber}</span></p>
+                            <p class="text-lg">Risposta: <span class="font-semibold">${log.answer}</span></p>
+                        </div>
+                        <button class="show-photo-btn p-2 hover:bg-gray-200 rounded-full" data-url="${log.photoUrl}">
+                            <i data-lucide="camera" class="w-6 h-6 text-gray-600"></i>
+                        </button>
+                    `;
+                } else if (log.type === 'delete') {
+                    logElement.classList.add('bg-gray-50');
+                    logElement.innerHTML = `
+                        <div><i data-lucide="trash-2" class="w-6 h-6 text-gray-500"></i></div>
+                        <div class="flex-grow">
+                            <p class="font-bold">${time} - ${teamName} <span class="font-normal text-gray-600">ha cancellato la risposta per il punto #${checkpointNumber}</span></p>
+                            <p class="text-gray-500 italic">Risposta precedente: "${log.answer}"</p>
+                        </div>
+                    `;
+                }
+                logContainer.appendChild(logElement);
+            });
+            
+            document.querySelectorAll('.show-photo-btn').forEach(btn => {
+                btn.onclick = (e) => showPhotoModal(e.currentTarget.dataset.url);
+            });
+
+            lucide.createIcons();
         });
-    } catch (error) {
-        galleryGrid.innerHTML = '';
-        showModal("Errore Galleria", "Impossibile caricare le foto. Potrebbe mancare un indice nel database. Controlla la console per sviluppatori (CTRL+SHIFT+I) per un link per crearlo. Dettagli: " + error.message);
-    }
-});
-document.getElementById('backToDashboardFromGallery').addEventListener('click', () => showView('organizerDashboardView'));
 
-document.getElementById('joinEventForm').addEventListener('submit', async (e) => {
+    } catch (error) {
+        logContainer.innerHTML = '';
+        showModal("Errore Log", "Impossibile caricare il log delle attività. Dettagli: " + error.message);
+    }
+}
+
+const photoModal = document.getElementById('photoModal');
+const modalImage = document.getElementById('modalImage');
+document.getElementById('closePhotoModalBtn').addEventListener('click', () => photoModal.classList.add('hidden'));
+
+function showPhotoModal(imageUrl) {
+    modalImage.src = imageUrl;
+    photoModal.classList.remove('hidden');
+}
+
+document.getElementById('joinEventForm').addEventListener('submit', async (e) => { 
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
@@ -275,15 +339,15 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
         const teamName = document.getElementById('teamName').value;
         const q = query(collection(db, "events"), where("joinCode", "==", joinCode));
         const eventSnapshot = await getDocs(q);
-        if (eventSnapshot.empty) { throw new Error("Codice evento non valido."); }
-
+        if(eventSnapshot.empty) { throw new Error("Codice evento non valido."); }
+        
         currentEventId = eventSnapshot.docs[0].id;
         const eventData = eventSnapshot.docs[0].data();
 
         if (eventData.status === 'finished') { throw new Error("Questo evento è già concluso."); }
-
+        
         await setDoc(doc(db, `events/${currentEventId}/teams`, currentUserId), { name: teamName }, { merge: true });
-
+        
         localStorage.setItem('currentEventId-' + currentUserId, currentEventId);
         initParticipantLobbyView();
 
@@ -292,23 +356,24 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
         btn.disabled = false;
     }
 });
-function initParticipantLobbyView() {
+
+function initParticipantLobbyView() { 
     if (participantListenerUnsub) participantListenerUnsub();
     const eventDocRef = doc(db, "events", currentEventId);
     participantListenerUnsub = onSnapshot(eventDocRef, (docSnap) => {
         if (docSnap.exists()) {
             const eventData = docSnap.data();
             document.getElementById('lobbyEventName').textContent = eventData.name;
-            if (eventData.status === 'active') {
+            if (eventData.status === 'active') { 
                 if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
-                initParticipantView(currentUserId);
-            }
-            else if (eventData.status === 'pending') {
-                showView('participantLobbyView');
-            }
-            else {
+                initParticipantView(currentUserId); 
+            } 
+            else if (eventData.status === 'pending') { 
+                showView('participantLobbyView'); 
+            } 
+            else { 
                 if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
-                initParticipantView(currentUserId, true);
+                initParticipantView(currentUserId, true); 
             }
         } else {
             if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
@@ -316,11 +381,12 @@ function initParticipantLobbyView() {
         }
     }, (error) => { console.error("Lobby listener error:", error); });
 }
+
 document.getElementById('logout-join').addEventListener('click', () => signOut(auth));
 document.getElementById('logout-lobby').addEventListener('click', () => signOut(auth));
 document.getElementById('logout-participant').addEventListener('click', async () => {
     const eventDoc = await getDoc(doc(db, "events", currentEventId));
-    if (eventDoc.exists() && eventDoc.data().status === 'finished') {
+    if(eventDoc.exists() && eventDoc.data().status === 'finished') {
         showModal("Sei sicuro di voler uscire?", "Uscendo ora non potrai più rientrare per vedere le tue risposte. L'evento è concluso.", true, () => {
             localStorage.removeItem('currentEventId-' + currentUserId);
             signOut(auth);
@@ -330,26 +396,27 @@ document.getElementById('logout-participant').addEventListener('click', async ()
         signOut(auth);
     }
 });
-async function initParticipantView(teamId, isReadOnly = false) {
-    if (participantListenerUnsub) participantListenerUnsub();
 
+async function initParticipantView(teamId, isReadOnly = false) { 
+    if (participantListenerUnsub) participantListenerUnsub();
+    
     const eventDocRef = doc(db, "events", currentEventId);
     participantListenerUnsub = onSnapshot(eventDocRef, (docSnap) => {
         if (docSnap.exists() && docSnap.data().status === 'finished' && !isReadOnly) {
             showModal("Gara Terminata!", "L'organizzatore ha concluso la gara. Puoi ancora vedere le tue risposte, ma non puoi più inviarne di nuove.", false);
-            initParticipantView(teamId, true);
+            initParticipantView(teamId, true); 
         }
     });
 
     try {
         document.getElementById('game-finished-banner').classList.toggle('hidden', !isReadOnly);
         const teamDoc = await getDoc(doc(db, `events/${currentEventId}/teams`, teamId));
-        if (teamDoc.exists()) { document.getElementById('participant-team-name-display').textContent = `Squadra: ${teamDoc.data().name}`; }
+        if(teamDoc.exists()) { document.getElementById('participant-team-name-display').textContent = `Squadra: ${teamDoc.data().name}`; }
         const checkpointsQuery = query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"));
         const submissionsQuery = query(collection(db, "submissions"), where("teamId", "==", teamId), where("eventId", "==", currentEventId));
         const checkpointsSnapshot = await getDocs(checkpointsQuery);
         const checkpoints = checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
+        
         onSnapshot(submissionsQuery, (snapshot) => {
             const submissions = {};
             snapshot.forEach(doc => { submissions[doc.data().checkpointId] = { id: doc.id, ...doc.data() }; });
@@ -362,7 +429,7 @@ async function initParticipantView(teamId, isReadOnly = false) {
                 card.className = `p-4 rounded-lg shadow-md flex flex-col items-center justify-center transition-all ${isCompleted ? 'bg-green-500 text-white' : 'bg-white'} ${!isReadOnly ? 'cursor-pointer hover:bg-gray-100' : 'cursor-default'}`;
                 card.innerHTML = `<span class="text-4xl font-bold">${checkpoint.number}</span><span class="text-sm mt-1">${isCompleted ? 'Completato' : 'Da visitare'}</span>${isCompleted ? '<i data-lucide="check-circle" class="w-6 h-6 mt-2"></i>' : '<i data-lucide="map-pin" class="w-6 h-6 mt-2"></i>'}`;
                 if (!isReadOnly || isCompleted) {
-                    card.addEventListener('click', () => openCheckpoint(checkpoint, teamId, isCompleted, submission, isReadOnly));
+                   card.addEventListener('click', () => openCheckpoint(checkpoint, teamId, isCompleted, submission, isReadOnly));
                 }
                 checkpointsGrid.appendChild(card);
             });
@@ -370,9 +437,10 @@ async function initParticipantView(teamId, isReadOnly = false) {
             showView('participantView');
         }, (error) => { console.error("Game submissions listener error:", error); });
     } catch (error) {
-        showModal("Errore Critico", "Impossibile caricare i dati della gara. Dettagli: " + error.message, false, () => signOut(auth));
+         showModal("Errore Critico", "Impossibile caricare i dati della gara. Dettagli: " + error.message, false, () => signOut(auth));
     }
 }
+
 async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isReadOnly = false) {
     showView('checkpointView');
     let imageUrlHtml = checkpoint.imageUrl ? `<div class="bg-gray-200 rounded-lg mb-4"><img src="${checkpoint.imageUrl}" alt="Immagine del punto" class="w-full h-48 object-contain rounded-lg"></div>` : '';
@@ -381,7 +449,7 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
     document.getElementById('teamIdInput').value = teamId;
     const answerInput = document.getElementById('answer');
     const photoInput = document.getElementById('photo');
-    const submitButton = submissionForm.querySelector('button[type="submit"]');
+    const submitButton = document.getElementById('submissionForm').querySelector('button[type="submit"]');
     const deleteButton = document.getElementById('deleteSubmissionBtn');
     if (isCompleted) {
         answerInput.value = submission.answer;
@@ -399,22 +467,37 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         document.getElementById('photo-preview-container').innerHTML = '';
     }
 }
+
 async function deleteSubmission(submissionId, teamId, checkpointId) {
     showModal("Conferma Cancellazione", "Sei sicuro di voler cancellare la tua risposta? Potrai inviarne una nuova.", true, async () => {
         try {
             const submissionRef = doc(db, "submissions", submissionId);
+            const submissionDoc = await getDoc(submissionRef);
+
+            if (submissionDoc.exists()) {
+                const subData = submissionDoc.data();
+                await addDoc(collection(db, `events/${currentEventId}/activity`), {
+                    type: 'delete',
+                    teamId: teamId,
+                    checkpointId: checkpointId,
+                    answer: subData.answer,
+                    timestamp: new Date()
+                });
+            }
+
             const photoRef = ref(storage, `submissions/${currentEventId}/${teamId}_${checkpointId}.jpg`);
             await deleteDoc(submissionRef);
             await deleteObject(photoRef);
             showModal("Successo", "Risposta cancellata. Ora puoi inviarne una nuova.");
             showView('participantView');
-        } catch (error) { showModal("Errore", "Cancellazione fallita: " + error.message); }
+        } catch(error) { showModal("Errore", "Cancellazione fallita: " + error.message); }
     });
 }
+
 document.getElementById('backToGrid').addEventListener('click', () => showView('participantView'));
 document.getElementById('submissionForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const submitButton = submissionForm.querySelector('button[type="submit"]');
+    const submitButton = e.target.querySelector('button[type="submit"]');
     submitButton.disabled = true;
     submitButton.innerHTML = `<i data-lucide="loader-2" class="animate-spin mr-2"></i> Caricamento...`;
     lucide.createIcons();
@@ -426,22 +509,36 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
     try {
         const eventDoc = await getDoc(doc(db, "events", currentEventId));
         if (eventDoc.data().status === 'finished') { throw new Error("La gara è terminata. Non è più possibile inviare risposte."); }
-
+        
         const photoRef = ref(storage, `submissions/${currentEventId}/${teamId}_${checkpointId}.jpg`);
         await uploadBytes(photoRef, photoFile);
         const photoUrl = await getDownloadURL(photoRef);
-        await addDoc(collection(db, "submissions"), { eventId: currentEventId, teamId, checkpointId, answer, photoUrl, timestamp: new Date() });
+        const submissionTimestamp = new Date();
+
+        await addDoc(collection(db, "submissions"), { eventId: currentEventId, teamId, checkpointId, answer, photoUrl, timestamp: submissionTimestamp });
+
+        await addDoc(collection(db, `events/${currentEventId}/activity`), {
+            type: 'submit',
+            teamId: teamId,
+            checkpointId: checkpointId,
+            answer: answer,
+            photoUrl: photoUrl,
+            timestamp: submissionTimestamp
+        });
         showModal("Successo", "Risposta inviata con successo!");
         showView('participantView');
-    } catch (error) { showModal("Errore", "Invio fallito: " + error.message); submitButton.disabled = false; submitButton.textContent = 'Invia Risposta'; }
+    } catch (error) { showModal("Errore", "Invio fallito: " + error.message); submitButton.disabled = false; submitButton.textContent = 'Invia Risposta';}
 });
+
 function showSubmissionDetail(submission, checkpoint, isCorrect, team) {
-    document.getElementById('organizerDetailContent').innerHTML = `<p><strong>Squadra:</strong> ${team.name}</p><p><strong>Risposta Data:</strong> ${submission.answer}</p><p><strong>Risposta Corretta:</strong> ${checkpoint.correctAnswer}</p><p><strong>Punteggio Assegnato:</strong> ${isCorrect ? (checkpoint.points || 0) : 0}</p><p class="mt-4"><strong>Foto:</strong></p><img src="${submission.photoUrl}" alt="Foto sottomessa" class="mt-2 rounded-lg w-full max-w-lg">`;
-    showView('organizerDetailView');
+     document.getElementById('organizerDetailContent').innerHTML = `<p><strong>Squadra:</strong> ${team.name}</p><p><strong>Risposta Data:</strong> ${submission.answer}</p><p><strong>Risposta Corretta:</strong> ${checkpoint.correctAnswer}</p><p><strong>Punteggio Assegnato:</strong> ${isCorrect ? (checkpoint.points || 0) : 0}</p><p class="mt-4"><strong>Foto:</strong></p><img src="${submission.photoUrl}" alt="Foto sottomessa" class="mt-2 rounded-lg w-full max-w-lg">`;
+     showView('organizerDetailView');
 }
+
 document.getElementById('backToOrganizer').addEventListener('click', () => showView('organizerDashboardView'));
 document.getElementById('manageCpBtn').addEventListener('click', () => initOrganizerAdmin());
 document.getElementById('manageTeamsBtn').addEventListener('click', () => initOrganizerTeamsView());
+
 async function initOrganizerTeamsView() {
     showView('organizerTeamsView');
     const teamsList = document.getElementById('teamsList');
@@ -456,6 +553,7 @@ async function initOrganizerTeamsView() {
     });
 }
 document.getElementById('backToDashboardFromTeams').addEventListener('click', () => showView('organizerDashboardView'));
+
 async function initOrganizerAdmin() {
     showView('organizerAdminView');
     const checkpointsList = document.getElementById('checkpointsList');
@@ -474,11 +572,13 @@ async function initOrganizerAdmin() {
         lucide.createIcons();
     });
 }
+
 async function deleteCheckpoint(id) {
     showModal("Conferma Eliminazione", "Sei sicuro di voler eliminare questo punto di controllo? L'azione è irreversibile.", true, async () => {
         try { await deleteDoc(doc(db, `events/${currentEventId}/checkpoints`, id)); } catch (error) { showModal("Errore", "Eliminazione fallita: " + error.message); }
     });
 }
+
 function startEditCheckpoint(id, data) {
     document.getElementById('editCheckpointId').value = id;
     const form = document.getElementById('addCheckpointForm');
@@ -488,19 +588,19 @@ function startEditCheckpoint(id, data) {
     form.bonusPoints.value = data.bonusPoints || '';
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Salva Modifiche';
-    submitBtn.classList.replace('bg-green-600', 'bg-yellow-500');
-    submitBtn.classList.replace('hover:bg-green-700', 'hover:bg-yellow-600');
+    submitBtn.classList.replace('btn-secondary', 'btn-primary');
     document.getElementById('cancelEditBtn').classList.remove('hidden');
 }
+
 function resetCheckpointForm() {
     const form = document.getElementById('addCheckpointForm');
     form.reset(); document.getElementById('editCheckpointId').value = '';
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Aggiungi Punto';
-    submitBtn.classList.replace('bg-yellow-500', 'bg-green-600');
-    submitBtn.classList.replace('hover:bg-yellow-600', 'hover:bg-green-700');
+    submitBtn.classList.replace('btn-primary', 'btn-secondary');
     document.getElementById('cancelEditBtn').classList.add('hidden');
 }
+
 document.getElementById('cancelEditBtn').addEventListener('click', resetCheckpointForm);
 document.getElementById('addCheckpointForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -529,8 +629,9 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
         const docRef = doc(db, `events/${currentEventId}/checkpoints`, finalCheckpointId);
         await updateDoc(docRef, data);
         resetCheckpointForm();
-    } catch (error) { showModal("Errore", "Salvataggio fallito: " + error.message); }
+    } catch(error) { showModal("Errore", "Salvataggio fallito: " + error.message); }
 });
+
 document.getElementById('backToDashboardBtn').addEventListener('click', () => showView('organizerDashboardView'));
 
 showView('loadingView');
