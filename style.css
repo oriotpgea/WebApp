@@ -1,0 +1,110 @@
+/*
+    Foglio di Stile Personalizzato - Stile Orienteering Piacenza
+*/
+
+/* 1. Definiamo la palette di colori e il font usando variabili CSS */
+:root {
+    --font-sans: 'Lato', sans-serif;
+    --primary-green: #005935; /* Verde scuro del logo */
+    --primary-orange: #FF7F00; /* Arancione del logo */
+    --dark-text: #333333;
+    --light-background: #f4f4f5; /* Grigio chiaro come bg-gray-100 */
+    --white: #ffffff;
+    --success-green: #16a34a; /* Verde per messaggi di successo */
+    --error-red: #dc2626;     /* Rosso per errori */
+}
+
+/* 2. Applichiamo lo stile di base al body */
+body {
+    font-family: var(--font-sans);
+    color: var(--dark-text);
+    background-color: var(--light-background);
+}
+
+/* 3. Stile per i titoli, usando il colore primario */
+h1, h2, h3 {
+    font-weight: 700; /* grassetto */
+    color: var(--primary-green);
+}
+
+h1 { font-weight: 900; } /* extra-bold per i titoli principali */
+
+
+/* 4. Stile generale per i pulsanti */
+.btn {
+    color: var(--white);
+    border-radius: 0.375rem; /* rounded-md */
+    transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.btn:hover {
+    transform: translateY(-2px); /* Leggero effetto al passaggio del mouse */
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+/* Pulsante Primario (Arancione) */
+.btn-primary {
+    background-color: var(--primary-orange);
+}
+.btn-primary:hover {
+    background-color: #e67300; /* Versione più scura dell'arancione */
+}
+
+/* Pulsante Secondario (Verde) */
+.btn-secondary {
+    background-color: var(--primary-green);
+}
+.btn-secondary:hover {
+    background-color: #004d2c; /* Versione più scura del verde */
+}
+
+/* Pulsanti solo icona (usati nella dashboard) */
+.btn-icon {
+    padding: 0.5rem; /* p-2 */
+    color: var(--white);
+    border-radius: 0.5rem; /* rounded-lg */
+    font-weight: 600; /* semibold */
+    transition: background-color 0.2s;
+}
+
+
+/* 5. Stile per gli input dei form */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+textarea {
+    border: 1px solid #d1d5db; /* border-gray-300 */
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--primary-green);
+    box-shadow: 0 0 0 2px rgba(0, 89, 53, 0.2);
+}
+
+
+/* 6. Manteniamo le animazioni e le classi di utilità originali */
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.pointer-events-none {
+    pointer-events: none;
+}
