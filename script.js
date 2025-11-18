@@ -99,17 +99,41 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
 
 function initOrganizerHomeView(user) {
     const eventsList = document.getElementById('organizerEventsList');
+    // Query per prendere gli eventi (RICORDA: serve l'indice su Firebase se non vedi nulla)
     const q = query(collection(db, "events"), where("organizerId", "==", user.uid), orderBy("creation_time", "desc"));
+    
     onSnapshot(q, (snapshot) => {
         eventsList.innerHTML = snapshot.empty ? `<p class="text-gray-500">Nessun evento creato.</p>` : '';
+        
         snapshot.forEach(doc => {
             const event = doc.data();
             const eventCard = document.createElement('div');
             eventCard.className = 'p-4 bg-white rounded-lg shadow-md flex justify-between items-center';
-            eventCard.querySelector('.manage-event-btn').onclick = () => { currentEventId = doc.id; initOrganizerDashboardView(); };
+            
+            // --- QUESTA È LA PARTE CHE MANCAVA ---
+            eventCard.innerHTML = `
+                <div>
+                    <h3 class="font-bold text-xl text-green-800">${event.name}</h3>
+                    <p class="text-sm text-gray-500">Codice: <span class="font-mono font-bold">${event.joinCode}</span></p>
+                </div>
+                <div class="flex space-x-2">
+                    <button class="manage-event-btn btn btn-primary px-4 py-2">Gestisci</button>
+                </div>
+            `;
+            // -------------------------------------
+
+            // Ora il pulsante esiste, quindi possiamo assegnare il click
+            eventCard.querySelector('.manage-event-btn').onclick = () => { 
+                currentEventId = doc.id; 
+                initOrganizerDashboardView(); 
+            };
+            
             eventsList.appendChild(eventCard);
         });
         lucide.createIcons();
+    }, (error) => {
+        // Aggiungiamo questo per vedere se manca l'indice su Firebase
+        console.error("Errore caricamento eventi:", error);
     });
     showView('organizerHomeView');
 }
