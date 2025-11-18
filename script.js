@@ -106,35 +106,12 @@ function initOrganizerHomeView(user) {
             const event = doc.data();
             const eventCard = document.createElement('div');
             eventCard.className = 'p-4 bg-white rounded-lg shadow-md flex justify-between items-center';
-            eventCard.innerHTML = `<div><h3 class="font-bold text-lg">${event.name}</h3><p class="text-sm font-semibold" style="color: var(--primary-green);">Codice: ${event.joinCode}</p><p class="text-xs text-gray-500 mt-1">Stato: <span class="font-medium ${event.status === 'active' ? 'text-green-500' : event.status === 'finished' ? 'text-gray-500' : 'text-yellow-500'}">${event.status}</span></p></div><div class="flex items-center space-x-2"><button class="manage-event-btn bg-blue-500 text-white px-3 py-2 rounded-md hover:bg-blue-600 text-sm font-semibold">Gestisci</button><button class="delete-event-btn bg-red-600 text-white p-2 rounded-full hover:bg-red-700"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>`;
             eventCard.querySelector('.manage-event-btn').onclick = () => { currentEventId = doc.id; initOrganizerDashboardView(); };
-            eventCard.querySelector('.delete-event-btn').onclick = () => deleteEvent(doc.id, event.name);
             eventsList.appendChild(eventCard);
         });
         lucide.createIcons();
     });
     showView('organizerHomeView');
-}
-
-async function deleteEvent(eventId, eventName) {
-    showModal("Conferma Eliminazione", `Sei sicuro di voler eliminare l'evento "${eventName}"? TUTTI i dati verranno cancellati per sempre.`, true, async () => {
-        try {
-            const batch = writeBatch(db);
-            const [checkpointsSnapshot, teamsSnapshot, submissionsSnapshot, activitySnapshot] = await Promise.all([ 
-                getDocs(collection(db, `events/${eventId}/checkpoints`)), 
-                getDocs(collection(db, `events/${eventId}/teams`)),
-                getDocs(query(collection(db, "submissions"), where("eventId", "==", eventId))),
-                getDocs(collection(db, `events/${eventId}/activity`))
-            ]);
-            checkpointsSnapshot.forEach(doc => batch.delete(doc.ref));
-            teamsSnapshot.forEach(doc => batch.delete(doc.ref));
-            submissionsSnapshot.forEach(doc => batch.delete(doc.ref));
-            activitySnapshot.forEach(doc => batch.delete(doc.ref));
-            batch.delete(doc(db, "events", eventId));
-            await batch.commit();
-            showModal("Successo", `Evento "${eventName}" eliminato.`);
-        } catch (error) { showModal("Errore", "Eliminazione fallita: " + error.message); }
-    });
 }
 
 document.getElementById('createEventForm').addEventListener('submit', async (e) => {
@@ -346,7 +323,7 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
 
         if (eventData.status === 'finished') { throw new Error("Questo evento è già concluso."); }
         
-        await setDoc(doc(db, `events/${currentEventId}/teams`, currentUserId), { name: teamName }, { merge: true });
+        await setDoc(doc(db, `events/${currentEventId}/teams`, currentUserId), { name: teamName, uid: currentUserId }, { merge: true });
         
         localStorage.setItem('currentEventId-' + currentUserId, currentEventId);
         initParticipantLobbyView();
