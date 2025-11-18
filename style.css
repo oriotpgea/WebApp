@@ -115,3 +115,24 @@ textarea:focus {
 
 .bg-brand-orange { background-color: var(--primary-orange); }
 .hover\:bg-brand-orange-dark:hover { background-color: #e67300; }
+
+/* ==========================================================================
+   FIX CRITICO PER MOBILE
+   ========================================================================== */
+
+/* Forza gli elementi nascosti a sparire, indipendentemente da Tailwind */
+.hidden {
+    display: none !important;
+}
+
+/* Assicura che il contenitore occupi tutto lo schermo su mobile */
+#appContainer {
+    min-height: 100vh;
+    width: 100%;
+    overflow-x: hidden; /* Evita lo scroll orizzontale indesiderato */
+}
+
+/* Migliora la leggibilità dei bottoni su touch screen */
+button {
+    touch-action: manipulation; /* Previene il doppio tap per lo zoom */
+}
