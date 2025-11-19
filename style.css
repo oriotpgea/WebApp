@@ -1,138 +1,123 @@
 /*
     Foglio di Stile Personalizzato - Stile Orienteering Piacenza
+    Focus: Branding, Tipografia e Componenti Base.
+    Il Layout è gestito interamente da Tailwind nel file HTML.
 */
 
-/* 1. Definiamo la palette di colori e il font usando variabili CSS */
+/* --- VARIABILI & BRANDING --- */
 :root {
     --font-body: 'Roboto', sans-serif;
     --font-heading: 'Montserrat', sans-serif;
-    --primary-green: #005935; /* Verde scuro del logo */
-    --primary-orange: #ff8000; /* Arancione del logo */
+    --primary-green: #005935;
+    --primary-orange: #ff8000;
     --dark-text: #333333;
-    --light-background: #f4f4f5; /* Grigio chiaro come bg-gray-100 */
+    --light-background: #f4f4f5;
     --white: #ffffff;
-    --success-green: #16a34a; /* Verde per messaggi di successo */
-    --error-red: #dc2626;     /* Rosso per errori */
 }
 
-/* 2. Applichiamo lo stile di base al body */
+/* --- BASE --- */
 body {
-    font-family: var(--font-sans);
+    font-family: var(--font-body);
     color: var(--dark-text);
     background-color: var(--light-background);
+    -webkit-font-smoothing: antialiased; /* Testo più nitido */
 }
 
-/* 3. Stile per i titoli, usando il colore primario */
 h1, h2, h3 {
     font-family: var(--font-heading);
-    font-weight: 700; /* grassetto */
     color: var(--primary-green);
 }
 
-h1 { font-weight: 900; } /* extra-bold per i titoli principali */
+h1 { font-weight: 900; }
+h2, h3 { font-weight: 700; }
 
-
-/* 4. Stile generale per i pulsanti */
+/* --- COMPONENTI: BOTTONI --- */
 .btn {
     color: var(--white);
     border-radius: 0.375rem; /* rounded-md */
-    transition: background-color 0.2s ease-in-out, transform 0.1s ease;
-    font-weight: 500; /* Aggiungiamo un po' di spessore */
+    transition: all 0.2s ease-in-out;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .btn:hover {
-    transform: translateY(-2px); /* Leggero effetto al passaggio del mouse */
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
 }
 
-/* Pulsante Primario (Arancione) */
+.btn:active {
+    transform: translateY(0);
+}
+
 .btn-primary {
     background-color: var(--primary-orange);
 }
 .btn-primary:hover {
-    background-color: #e67300; /* Versione più scura dell'arancione */
+    background-color: #e67300;
 }
 
-/* Pulsante Secondario (Verde) */
 .btn-secondary {
     background-color: var(--primary-green);
 }
 .btn-secondary:hover {
-    background-color: #004d2c; /* Versione più scura del verde */
+    background-color: #004d2c;
 }
 
-/* Pulsanti solo icona (usati nella dashboard) */
+/* Pulsanti Icona (piccoli) */
 .btn-icon {
-    padding: 0.5rem; /* p-2 */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
     color: var(--white);
-    border-radius: 0.5rem; /* rounded-lg */
-    font-weight: 600; /* semibold */
+    border-radius: 0.5rem;
     transition: background-color 0.2s;
 }
 
-/* 5. Stile per gli input dei form */
+/* --- COMPONENTI: INPUT --- */
 input[type="text"],
 input[type="email"],
 input[type="password"],
 input[type="number"],
-textarea {
-    border: 1px solid #d1d5db; /* border-gray-300 */
+textarea,
+select {
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-input[type="text"]:focus,
-input[type="email"]:focus,
-input[type="password"]:focus,
-input[type="number"]:focus,
-textarea:focus {
+input:focus,
+textarea:focus,
+select:focus {
     outline: none;
     border-color: var(--primary-green);
-    box-shadow: 0 0 0 2px rgba(0, 89, 53, 0.2);
+    box-shadow: 0 0 0 3px rgba(0, 89, 53, 0.1);
 }
 
-
-/* 6. Manteniamo le animazioni e le classi di utilità originali */
+/* --- UTILITY VISIVE --- */
+/* Animazione Caricamento */
 .animate-spin {
     animation: spin 1s linear infinite;
 }
-
 @keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
-.pointer-events-none {
-    pointer-events: none;
-}
-
-/* Utility per colori brand personalizzati */
+/* Colori Brand per Tailwind (Fallback se config JS fallisce) */
+.text-brand-green { color: var(--primary-green); }
 .bg-brand-green { background-color: var(--primary-green); }
-.hover\:bg-brand-green-dark:hover { background-color: #004d2c; }
+.hover\:bg-brand-green:hover { background-color: #004d2c; }
 
+.text-brand-orange { color: var(--primary-orange); }
 .bg-brand-orange { background-color: var(--primary-orange); }
-.hover\:bg-brand-orange-dark:hover { background-color: #e67300; }
 
-/* ==========================================================================
-   FIX CRITICO PER MOBILE
-   ========================================================================== */
-
-/* Forza gli elementi nascosti a sparire, indipendentemente da Tailwind */
+/* --- SALVAVITA VISIVO --- */
+/* Fondamentale per nascondere le viste prima che Tailwind carichi o se c'è un errore */
 .hidden {
     display: none !important;
-}
-
-/* Assicura che il contenitore occupi tutto lo schermo su mobile */
-#appContainer {
-    min-height: 100vh;
-    width: 100%;
-    overflow-x: hidden; /* Evita lo scroll orizzontale indesiderato */
-}
-
-/* Migliora la leggibilità dei bottoni su touch screen */
-button {
-    touch-action: manipulation; /* Previene il doppio tap per lo zoom */
 }

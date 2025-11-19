@@ -33,6 +33,9 @@ let currentUserId = null;
 let participantListenerUnsub = null;
 let activityLogUnsub = null;
 let unsubscribeDashboard = null;
+let organizerHomeUnsub = null;
+let organizerTeamsUnsub = null;
+let organizerAdminUnsub = null;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
@@ -94,15 +97,28 @@ function showModal(title, message, showConfirm = false, onConfirm = null) {
 }
 modalCancelBtn.addEventListener('click', () => modal.classList.add('hidden'));
 modalConfirmBtn.addEventListener('click', () => { if (confirmCallback) confirmCallback(); modal.classList.add('hidden'); });
-document.getElementById('loginForm').addEventListener('submit', (e) => { e.preventDefault(); signInWithEmailAndPassword(auth, loginForm.email.value, loginForm.password.value).catch(err => showModal("Errore", "Login fallito: " + err.message)); });
-document.getElementById('registerForm').addEventListener('submit', async (e) => { e.preventDefault(); try { const cred = await createUserWithEmailAndPassword(auth, registerForm.email.value, registerForm.password.value); await setDoc(doc(db, "users", cred.user.uid), { role: 'participant' }); } catch (error) { showModal("Errore", "Registrazione fallita: " + error.message); } });
+document.getElementById('loginForm').addEventListener('submit', (e) => { 
+    e.preventDefault(); 
+    signInWithEmailAndPassword(auth, e.target.email.value, e.target.password.value)
+    .catch(err => showModal("Errore", "Login fallito: " + err.message)); 
+});
+
+document.getElementById('registerForm').addEventListener('submit', async (e) => { 
+    e.preventDefault(); 
+    try { 
+        const cred = await createUserWithEmailAndPassword(auth, e.target.email.value, e.target.password.value); 
+        await setDoc(doc(db, "users", cred.user.uid), { role: 'participant' }); 
+    } catch (error) { 
+        showModal("Errore", "Registrazione fallita: " + error.message); 
+    } 
+});
 
 function initOrganizerHomeView(user) {
+    if (organizerHomeUnsub) organizerHomeUnsub();
     const eventsList = document.getElementById('organizerEventsList');
-    // Query per prendere gli eventi (RICORDA: serve l'indice su Firebase se non vedi nulla)
     const q = query(collection(db, "events"), where("organizerId", "==", user.uid), orderBy("creation_time", "desc"));
     
-    onSnapshot(q, (snapshot) => {
+    organizerHomeUnsub = onSnapshot(q, (snapshot) => {
         eventsList.innerHTML = snapshot.empty ? `<p class="text-gray-500">Nessun evento creato.</p>` : '';
         
         snapshot.forEach(doc => {
@@ -151,27 +167,28 @@ document.getElementById('logout-organizer-home').addEventListener('click', () =>
 async function initOrganizerDashboardView() { showView('organizerDashboardView'); setupDashboardListener(); }
 
 async function setupDashboardListener() {
-    if(unsubscribeDashboard) unsubscribeDashboard();
-    const eventRef = doc(db, "events", currentEventId);
-    unsubscribeDashboard = onSnapshot(eventRef, async () => { 
-        try {
-            const [eventDoc, teamsSnapshot, checkpointsSnapshot, submissionsSnapshot] = await Promise.all([
-                getDoc(eventRef),
-                getDocs(collection(db, `events/${currentEventId}/teams`)),
-                getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"))),
-                getDocs(query(collection(db, "submissions"), where("eventId", "==", currentEventId)))
-            ]);
-            if (eventDoc.exists()) {
-                const eventData = eventDoc.data();
-                renderOrganizerUI(
-                    eventData,
-                    teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    submissionsSnapshot.docs.map(doc => ({id: doc.id, ...doc.data()}))
-                );
-            }
-        } catch (error) { showModal("Errore Dashboard", "Impossibile caricare i dati: " + error.message); }
-    });
+    if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
+    
+    try {
+        const eventRef = doc(db, "events", currentEventId);
+        const [eventDoc, teamsSnapshot, checkpointsSnapshot, submissionsSnapshot] = await Promise.all([
+            getDoc(eventRef),
+            getDocs(collection(db, `events/${currentEventId}/teams`)),
+            getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"))),
+            getDocs(query(collection(db, "submissions"), where("eventId", "==", currentEventId)))
+        ]);
+
+        if (eventDoc.exists()) {
+            renderOrganizerUI(
+                eventDoc.data(),
+                teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                submissionsSnapshot.docs.map(doc => ({id: doc.id, ...doc.data()}))
+            );
+        }
+    } catch (error) { 
+        showModal("Errore Dashboard", "Impossibile caricare i dati: " + error.message); 
+    }
 }
 
 function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
@@ -191,15 +208,7 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
 
         const isCorrect = checkpoint.correctAnswer.toLowerCase().trim() === sub.answer.toLowerCase().trim();
         if (isCorrect) { 
-            teamScores[sub.teamId].score += (checkpoint.points || 0); 
-            const eventStartTime = eventData.startTime?.toDate();
-            if(eventStartTime && checkpoint.timeBonus > 0) {
-                const submissionTime = sub.timestamp.toDate();
-                const timeDiffMinutes = (submissionTime - eventStartTime) / 60000;
-                if(timeDiffMinutes <= checkpoint.timeBonus) {
-                    teamScores[sub.teamId].score += (checkpoint.bonusPoints || 0);
-                }
-            }
+            teamScores[sub.teamId].score += (checkpoint.points || 0);
         }
         const cell = document.getElementById(`cell-${sub.teamId}-${sub.checkpointId}`);
         if (cell) {
@@ -541,9 +550,10 @@ document.getElementById('manageCpBtn').addEventListener('click', () => initOrgan
 document.getElementById('manageTeamsBtn').addEventListener('click', () => initOrganizerTeamsView());
 
 async function initOrganizerTeamsView() {
+    if (organizerTeamsUnsub) organizerTeamsUnsub();
     showView('organizerTeamsView');
     const teamsList = document.getElementById('teamsList');
-    onSnapshot(query(collection(db, `events/${currentEventId}/teams`)), (snapshot) => {
+    organizerTeamsUnsub = onSnapshot(query(collection(db, `events/${currentEventId}/teams`)), (snapshot) => {
         teamsList.innerHTML = snapshot.empty ? '<p>Ancora nessuna squadra iscritta.</p>' : '';
         snapshot.forEach(doc => {
             const item = document.createElement('div');
@@ -556,10 +566,11 @@ async function initOrganizerTeamsView() {
 document.getElementById('backToDashboardFromTeams').addEventListener('click', () => showView('organizerDashboardView'));
 
 async function initOrganizerAdmin() {
+    if (organizerAdminUnsub) organizerAdminUnsub();
     showView('organizerAdminView');
     const checkpointsList = document.getElementById('checkpointsList');
     const checkpointsQuery = query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"));
-    onSnapshot(checkpointsQuery, (snapshot) => {
+    organizerAdminUnsub = onSnapshot(checkpointsQuery, (snapshot) => {
         checkpointsList.innerHTML = snapshot.empty ? '<p>Nessun punto di controllo creato.</p>' : '';
         snapshot.docs.forEach(doc => {
             const cp = doc.data(); const id = doc.id;
@@ -585,8 +596,6 @@ function startEditCheckpoint(id, data) {
     const form = document.getElementById('addCheckpointForm');
     form.number.value = data.number; form.question.value = data.question;
     form.correctAnswer.value = data.correctAnswer; form.points.value = data.points;
-    form.timeBonus.value = data.timeBonus || '';
-    form.bonusPoints.value = data.bonusPoints || '';
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Salva Modifiche';
     submitBtn.classList.replace('btn-secondary', 'btn-primary');
@@ -610,9 +619,7 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
         number: parseInt(form.number.value),
         question: form.question.value,
         correctAnswer: form.correctAnswer.value,
-        points: parseInt(form.points.value),
-        timeBonus: parseInt(form.timeBonus.value) || 0,
-        bonusPoints: parseInt(form.bonusPoints.value) || 0
+        points: parseInt(form.points.value)
     };
     const checkpointId = document.getElementById('editCheckpointId').value;
     const imageFile = form.image.files[0];
@@ -634,6 +641,45 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
 });
 
 document.getElementById('backToDashboardBtn').addEventListener('click', () => showView('organizerDashboardView'));
+
+// --- NUOVA LOGICA: Toggle Password ---
+document.querySelectorAll('.toggle-password').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        // Trova l'input associato
+        const inputId = btn.getAttribute('data-target');
+        const input = document.getElementById(inputId);
+        const icon = btn.querySelector('svg') || btn.querySelector('i'); // Supporto per Lucide renderizzato o raw
+        
+        if (input.type === 'password') {
+            input.type = 'text';
+            // Cambia icona in eye-off (rimuovi eye, aggiungi eye-off)
+            // Nota: Lucide sostituisce i tag <i> con <svg>, quindi gestiamo attributi
+            if(icon) icon.setAttribute('data-lucide', 'eye-off');
+        } else {
+            input.type = 'password';
+            if(icon) icon.setAttribute('data-lucide', 'eye');
+        }
+        lucide.createIcons(); // Rerenderizza le icone
+    });
+});
+
+// --- FIX REFRESH: Gestione corretta rotazione icona ---
+const refreshBtn = document.getElementById('refreshDashboardBtn');
+if(refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+        // 1. Avvia rotazione
+        const iconStart = refreshBtn.querySelector('svg') || refreshBtn.querySelector('i');
+        if(iconStart) iconStart.classList.add('animate-spin');
+        
+        setupDashboardListener().then(() => {
+            setTimeout(() => {
+                // 2. Cerca di nuovo l'icona (perché Lucide potrebbe averla rigenerata)
+                const iconEnd = refreshBtn.querySelector('svg') || refreshBtn.querySelector('i');
+                if(iconEnd) iconEnd.classList.remove('animate-spin');
+            }, 500); 
+        });
+    });
+}
 
 showView('loadingView');
 lucide.createIcons();
