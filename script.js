@@ -36,6 +36,7 @@ let unsubscribeDashboard = null;
 let organizerHomeUnsub = null;
 let organizerTeamsUnsub = null;
 let organizerAdminUnsub = null;
+let dashboardData = null;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
@@ -177,16 +178,22 @@ async function setupDashboardListener() {
             getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"))),
             getDocs(query(collection(db, "submissions"), where("eventId", "==", currentEventId)))
         ]);
-
         if (eventDoc.exists()) {
+            dashboardData = {
+                checkpoints: checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                teams: teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                submissions: submissionsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+            };
+            // ---------------------------------------------------------
             renderOrganizerUI(
                 eventDoc.data(),
-                teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                submissionsSnapshot.docs.map(doc => ({id: doc.id, ...doc.data()}))
+                dashboardData.teams,       // Usiamo i dati appena strutturati
+                dashboardData.checkpoints,
+                dashboardData.submissions
             );
         }
-    } catch (error) { 
+    }
+    catch (error) { 
         showModal("Errore Dashboard", "Impossibile caricare i dati: " + error.message); 
     }
 }
@@ -226,7 +233,83 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
     lucide.createIcons();
 }
 
-document.getElementById('exportCsvBtn').addEventListener('click', () => { /* ... logica futura ... */ });
+document.getElementById('exportCsvBtn').addEventListener('click', () => {
+    if (!dashboardData || !dashboardData.teams.length) {
+        showModal("Attenzione", "Nessun dato da esportare.");
+        return;
+    }
+
+    const { teams, checkpoints, submissions } = dashboardData;
+
+    // 1. Calcoliamo i punteggi per ordinare la classifica
+    const teamStats = teams.map(team => {
+        let score = 0;
+        const teamSubs = [];
+        checkpoints.forEach(cp => {
+            const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === cp.id);
+            let isCorrect = false;
+            let answer = "";
+            
+            if (sub) {
+                answer = sub.answer;
+                if (cp.correctAnswer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) {
+                    score += (cp.points || 0);
+                    isCorrect = true;
+                }
+            }
+            teamSubs.push({ answer, isCorrect, hasSubmission: !!sub });
+        });
+        return { name: team.name, score, subs: teamSubs };
+    });
+
+    // Ordiniamo: vincitore in alto
+    teamStats.sort((a, b) => b.score - a.score);
+
+    // 2. Costruiamo la tabella HTML per Excel (supporta i colori)
+    let tableHtml = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="UTF-8"></head>
+    <body>
+        <table border="1">
+            <thead>
+                <tr style="background-color: #f0f0f0; font-weight: bold;">
+                    <th style="width: 200px;">Squadra</th>
+                    ${checkpoints.map(cp => `<th style="width: 150px;">Domanda #${cp.number} (${cp.points}pt)</th>`).join('')}
+                    <th style="width: 100px; background-color: #e0e0e0;">TOTALE PUNTI</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    teamStats.forEach(stat => {
+        tableHtml += `<tr>
+            <td style="font-weight: bold;">${stat.name}</td>
+            ${stat.subs.map(s => {
+                // Logica Colori: Verde (Esatto), Rosso (Sbagliato), Bianco (Nessuna risposta)
+                let bgColor = '#ffffff';
+                let textColor = '#000000';
+                if (s.hasSubmission) {
+                    if (s.isCorrect) { bgColor = '#dcfce7'; textColor = '#166534'; } // Verde
+                    else { bgColor = '#fee2e2'; textColor = '#991b1b'; } // Rosso
+                }
+                return `<td style="background-color: ${bgColor}; color: ${textColor};">${s.answer || '-'}</td>`;
+            }).join('')}
+            <td style="font-weight: bold; text-align: center; background-color: #f3f4f6;">${stat.score}</td>
+        </tr>`;
+    });
+
+    tableHtml += `</tbody></table></body></html>`;
+
+    // 3. Download come file .xls
+    const blob = new Blob([tableHtml], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Classifica_Completa_${new Date().toISOString().slice(0,10)}.xls`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+});
 document.getElementById('backToOrganizerHome').addEventListener('click', () => { if(unsubscribeDashboard) unsubscribeDashboard(); currentEventId = null; showView('organizerHomeView'); });
 
 document.getElementById('startEventBtn').addEventListener('click', () => {
@@ -346,7 +429,8 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
     btn.disabled = true;
     try {
         const joinCode = document.getElementById('joinCode').value.toUpperCase();
-        const teamName = document.getElementById('teamName').value;
+        const teamName = document.getElementById('teamName').value.trim();
+        
         const q = query(collection(db, "events"), where("joinCode", "==", joinCode));
         const eventSnapshot = await getDocs(q);
         if(eventSnapshot.empty) { throw new Error("Codice evento non valido."); }
@@ -356,13 +440,28 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
 
         if (eventData.status === 'finished') { throw new Error("Questo evento è già concluso."); }
         
-        await setDoc(doc(db, `events/${currentEventId}/teams`, currentUserId), { name: teamName, uid: currentUserId }, { merge: true });
+        const teamRef = doc(db, `events/${currentEventId}/teams`, currentUserId);
+        const teamDoc = await getDoc(teamRef);
+
+        if (teamDoc.exists()) {
+            const existingName = teamDoc.data().name;
+            if (existingName.toLowerCase() !== teamName.toLowerCase()) {
+                throw new Error(`Sei già registrato a questo evento come "${existingName}". Devi usare quel nome per rientrare.`);
+            }
+        } else {
+            // MODIFICA QUI: Aggiunto salvataggio email
+            await setDoc(teamRef, { 
+                name: teamName, 
+                uid: currentUserId,
+                email: auth.currentUser.email // <--- Dato critico aggiunto
+            });
+        }
         
         localStorage.setItem('currentEventId-' + currentUserId, currentEventId);
         initParticipantLobbyView();
 
     } catch (error) {
-        showModal("Errore", error.message);
+        showModal("Attenzione", error.message);
         btn.disabled = false;
     }
 });
@@ -453,14 +552,36 @@ async function initParticipantView(teamId, isReadOnly = false) {
 
 async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isReadOnly = false) {
     showView('checkpointView');
+    
+    // 1. Gestione Immagine
     let imageUrlHtml = checkpoint.imageUrl ? `<div class="bg-gray-200 rounded-lg mb-4"><img src="${checkpoint.imageUrl}" alt="Immagine del punto" class="w-full h-48 object-contain rounded-lg"></div>` : '';
-    document.getElementById('checkpointDetail').innerHTML = `${imageUrlHtml}<h2 class="text-2xl font-bold mb-4">Punto #${checkpoint.number}</h2><p class="text-lg bg-gray-100 p-4 rounded-md">${checkpoint.question}</p>`;
+    
+    // 2. Gestione Descrizione Facoltativa (Testo aggiuntivo) - NUOVO
+    let descriptionHtml = checkpoint.description ? `<div class="mb-4 text-gray-600 text-sm italic border-l-4 border-gray-300 pl-3">${checkpoint.description.replace(/\n/g, '<br>')}</div>` : '';
+
+    // 3. Rendering HTML Aggiornato
+    document.getElementById('checkpointDetail').innerHTML = `
+        ${imageUrlHtml}
+        <h2 class="text-2xl font-bold mb-2">Punto #${checkpoint.number}</h2>
+        ${descriptionHtml}
+        <p class="text-lg bg-gray-100 p-4 rounded-md font-medium text-gray-800 shadow-inner">${checkpoint.question}</p>
+    `;
+    
     document.getElementById('checkpointIdInput').value = checkpoint.id;
     document.getElementById('teamIdInput').value = teamId;
+    
     const answerInput = document.getElementById('answer');
     const photoInput = document.getElementById('photo');
     const submitButton = document.getElementById('submissionForm').querySelector('button[type="submit"]');
     const deleteButton = document.getElementById('deleteSubmissionBtn');
+
+    // 4. Impostazione Placeholder Dinamico - NUOVO
+    if (checkpoint.placeholder) {
+        answerInput.placeholder = checkpoint.placeholder; 
+    } else {
+        answerInput.placeholder = "Scrivi qui..."; 
+    }
+
     if (isCompleted) {
         answerInput.value = submission.answer;
         answerInput.disabled = true;
@@ -468,12 +589,16 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         submitButton.classList.add('hidden');
         deleteButton.classList.toggle('hidden', isReadOnly);
         deleteButton.onclick = () => deleteSubmission(submission.id, teamId, checkpoint.id);
-        document.getElementById('photo-preview-container').innerHTML = `<p class="mt-4">Foto inviata:</p><img src="${submission.photoUrl}" class="mt-2 rounded-md max-w-sm w-full" />`;
+        document.getElementById('photo-preview-container').innerHTML = `<p class="mt-4 font-bold text-green-600">Foto inviata:</p><img src="${submission.photoUrl}" class="mt-2 rounded-md max-w-sm w-full border-4 border-green-100" />`;
     } else {
-        answerInput.value = ''; answerInput.disabled = isReadOnly; photoInput.value = '';
-        photoInput.classList.toggle('hidden', isReadOnly); submitButton.classList.toggle('hidden', isReadOnly);
+        answerInput.value = ''; 
+        answerInput.disabled = isReadOnly; 
+        photoInput.value = '';
+        photoInput.classList.toggle('hidden', isReadOnly); 
+        submitButton.classList.toggle('hidden', isReadOnly);
         deleteButton.classList.add('hidden');
-        submitButton.disabled = false; submitButton.textContent = 'Invia Risposta';
+        submitButton.disabled = false; 
+        submitButton.textContent = 'Invia Risposta';
         document.getElementById('photo-preview-container').innerHTML = '';
     }
 }
@@ -520,9 +645,17 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         const eventDoc = await getDoc(doc(db, "events", currentEventId));
         if (eventDoc.data().status === 'finished') { throw new Error("La gara è terminata. Non è più possibile inviare risposte."); }
         
+        // Aggiorna il testo del bottone per dare feedback
+        submitButton.innerHTML = `<i data-lucide="loader-2" class="animate-spin mr-2"></i> Comprimo e invio...`;
+        
+        // Comprimi: Max 1024px larghezza, Qualità 70% (0.7)
+        // Questo riduce una foto da 5MB a circa 150-300KB
+        const compressedFile = await compressImage(photoFile, 1024, 0.7);
+        
         const photoRef = ref(storage, `submissions/${currentEventId}/${teamId}_${checkpointId}.jpg`);
-        await uploadBytes(photoRef, photoFile);
+        await uploadBytes(photoRef, compressedFile);
         const photoUrl = await getDownloadURL(photoRef);
+        // ------------------------------
         const submissionTimestamp = new Date();
 
         await addDoc(collection(db, "submissions"), { eventId: currentEventId, teamId, checkpointId, answer, photoUrl, timestamp: submissionTimestamp });
@@ -553,14 +686,30 @@ async function initOrganizerTeamsView() {
     if (organizerTeamsUnsub) organizerTeamsUnsub();
     showView('organizerTeamsView');
     const teamsList = document.getElementById('teamsList');
-    organizerTeamsUnsub = onSnapshot(query(collection(db, `events/${currentEventId}/teams`)), (snapshot) => {
-        teamsList.innerHTML = snapshot.empty ? '<p>Ancora nessuna squadra iscritta.</p>' : '';
+    
+    // Aggiunto orderBy('name') per ordine alfabetico
+    organizerTeamsUnsub = onSnapshot(query(collection(db, `events/${currentEventId}/teams`), orderBy('name')), (snapshot) => {
+        teamsList.innerHTML = snapshot.empty ? '<p class="text-gray-500 italic">Ancora nessuna squadra iscritta.</p>' : '';
+        
         snapshot.forEach(doc => {
+            const data = doc.data();
             const item = document.createElement('div');
-            item.className = 'p-3 bg-gray-100 rounded-md flex justify-between items-center';
-            item.innerHTML = `<p class="font-medium">${doc.data().name}</p>`;
+            // Layout aggiornato per mostrare l'email
+            item.className = 'p-4 bg-gray-50 border border-gray-200 rounded-lg flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2';
+            
+            item.innerHTML = `
+                <div>
+                    <p class="font-bold text-lg text-gray-800">${data.name}</p>
+                    <p class="text-sm text-gray-500 flex items-center gap-1">
+                        <i data-lucide="mail" class="w-3 h-3"></i> 
+                        ${data.email || '<span class="italic text-gray-400">Email non disponibile</span>'}
+                    </p>
+                </div>
+                <div class="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-1 rounded">ID: ${doc.id.substr(0,6)}...</div>
+            `;
             teamsList.appendChild(item);
         });
+        lucide.createIcons();
     });
 }
 document.getElementById('backToDashboardFromTeams').addEventListener('click', () => showView('organizerDashboardView'));
@@ -595,6 +744,8 @@ function startEditCheckpoint(id, data) {
     document.getElementById('editCheckpointId').value = id;
     const form = document.getElementById('addCheckpointForm');
     form.number.value = data.number; form.question.value = data.question;
+    form.description.value = data.description || '';
+    form.placeholder.value = data.placeholder || '';
     form.correctAnswer.value = data.correctAnswer; form.points.value = data.points;
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Salva Modifiche';
@@ -618,6 +769,8 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
     const data = {
         number: parseInt(form.number.value),
         question: form.question.value,
+        description: form.description.value,
+        placeholder: form.placeholder.value,
         correctAnswer: form.correctAnswer.value,
         points: parseInt(form.points.value)
     };
@@ -682,4 +835,40 @@ if(refreshBtn) {
 }
 
 showView('loadingView');
+
+// --- HELPER: Compressione Immagini ---
+function compressImage(file, maxWidth, quality) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+                
+                // Calcolo nuove dimensioni mantenendo l'aspect ratio
+                if (width > maxWidth) {
+                    height *= maxWidth / width;
+                    width = maxWidth;
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Conversione in Blob JPEG compresso
+                canvas.toBlob((blob) => {
+                    resolve(blob);
+                }, 'image/jpeg', quality);
+            };
+            img.onerror = (error) => reject(error);
+        };
+        reader.onerror = (error) => reject(error);
+    });
+}
+
 lucide.createIcons();

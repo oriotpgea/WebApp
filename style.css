@@ -121,3 +121,10 @@ select:focus {
 .hidden {
     display: none !important;
 }
+
+/* --- FIX BROWSER --- */
+/* Nasconde l'occhio e la croce di default di Edge/IE nei campi password */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+    display: none;
+}

@@ -271,6 +271,16 @@
                             </div>
 
                             <div>
+                                <label for="cp-description" class="block text-sm font-bold mb-1">Descrizione / Storia (Facoltativo)</label>
+                                <textarea id="cp-description" name="description" rows="3" class="w-full p-2 border rounded-md text-sm text-gray-600" placeholder="Es. Cenni storici sul monumento, testo da leggere..."></textarea>
+                            </div>
+
+                            <div>
+                                <label for="cp-placeholder" class="block text-sm font-bold mb-1">Esempio Risposta (Placeholder)</label>
+                                <input type="text" id="cp-placeholder" name="placeholder" class="w-full p-2 border rounded-md text-sm text-gray-500 italic" placeholder="Es. 1860 (compare dentro la casella di risposta)">
+                            </div>
+
+                            <div>
                                 <label for="cp-correctAnswer" class="block text-sm font-bold mb-1">Risposta Esatta</label>
                                 <input type="text" id="cp-correctAnswer" name="correctAnswer" required class="w-full p-2 border rounded-md bg-green-50 border-green-200">
                             </div>
@@ -310,7 +320,21 @@
              <div id="game-finished-banner" class="hidden bg-yellow-400 text-yellow-900 p-4 rounded-lg mb-6 text-center font-bold shadow-md animate-bounce">
                  ⚠️ GARA TERMINATA - MODALITÀ SOLA LETTURA
              </div>
-             
+
+             <div class="bg-blue-50 border-l-4 border-blue-500 text-blue-800 p-4 mb-6 rounded-r shadow-sm">
+                <div class="flex items-start">
+                    <div class="flex-shrink-0">
+                        <i data-lucide="info" class="w-6 h-6 text-blue-600"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="font-bold text-sm uppercase">Attenzione alla Compilazione</p>
+                        <p class="text-sm mt-1">
+                            Scrivete le risposte con precisione. Osservate il <strong>testo di esempio (in grigio)</strong> che appare nella casella prima di scrivere: vi suggerisce il formato corretto (es. date, nomi, spazi).
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             <div id="checkpointsGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-10">
                 </div>
         </div>
