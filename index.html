@@ -8,7 +8,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
 
     <script>
-        // Funzione che prova ad applicare la configurazione
         function configureTailwind() {
             if (typeof tailwind !== 'undefined') {
                 tailwind.config = {
@@ -23,11 +22,9 @@
                 };
                 console.log("Tailwind configurato correttamente.");
             } else {
-                // Se tailwind non è ancora pronto, riprova tra 50ms
                 setTimeout(configureTailwind, 50);
             }
         }
-        // Avvia il tentativo
         configureTailwind();
     </script>
     
@@ -136,6 +133,25 @@
                         <label for="teamName" class="block font-bold text-gray-700 mb-1">Nome Squadra</label>
                         <input type="text" id="teamName" required class="w-full p-3 border rounded-md" placeholder="I Campioni">
                     </div>
+                    <div class="bg-gray-50 p-4 rounded-md border border-gray-200">
+                        <label class="block font-bold text-gray-700 mb-2">Categoria di Partecipazione</label>
+                        <div class="flex flex-col gap-3">
+                            <label class="flex items-center space-x-3 cursor-pointer p-2 hover:bg-white rounded transition-colors border border-transparent hover:border-gray-200">
+                                <input type="radio" name="joinCategory" value="competitive" checked class="form-radio text-brand-orange w-5 h-5 focus:ring-brand-orange">
+                                <div class="flex flex-col">
+                                    <span class="font-bold text-gray-800">Competitiva (Agonistica)</span>
+                                    <span class="text-xs text-gray-500">Con classifica, premi e validazione giudici.</span>
+                                </div>
+                            </label>
+                            <label class="flex items-center space-x-3 cursor-pointer p-2 hover:bg-white rounded transition-colors border border-transparent hover:border-gray-200">
+                                <input type="radio" name="joinCategory" value="non-competitive" class="form-radio text-brand-green w-5 h-5 focus:ring-brand-green">
+                                <div class="flex flex-col">
+                                    <span class="font-bold text-gray-800">Non Competitiva (Ludica)</span>
+                                    <span class="text-xs text-gray-500">Senza classifica. Solo per divertimento.</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
                     <button type="submit" class="w-full p-4 rounded-md font-bold btn btn-primary text-lg shadow-lg">ENTRA IN GARA</button>
                 </form>
             </div>
@@ -168,7 +184,8 @@
             <header class="bg-white p-4 md:p-6 rounded-xl shadow-md mb-6 flex flex-col md:flex-row justify-between items-center gap-4 border-l-4 border-brand-green">
                 <div class="flex gap-2 bg-gray-100 p-1 rounded-lg">
                     <button id="refreshDashboardBtn" title="Aggiorna Dati" class="btn-icon bg-blue-500 hover:bg-blue-600"><i data-lucide="refresh-cw" class="w-5 h-5"></i></button>
-                    <div class="w-px h-6 bg-gray-300 mx-1 self-center"></div> <button id="startEventBtn" title="Avvia Gara" class="btn-icon bg-green-600 hover:bg-green-700"><i data-lucide="play" class="w-5 h-5"></i></button>
+                    <div class="w-px h-6 bg-gray-300 mx-1 self-center"></div> 
+                    <button id="startEventBtn" title="Avvia Gara" class="btn-icon bg-green-600 hover:bg-green-700"><i data-lucide="play" class="w-5 h-5"></i></button>
                     <button id="finishEventBtn" title="Termina Gara" class="btn-icon bg-red-600 hover:bg-red-700"><i data-lucide="square" class="w-5 h-5"></i></button>
                 </div>
                 <div class="flex flex-col items-start">
@@ -182,6 +199,7 @@
                         <button id="activityLogBtn" title="Log Attività" class="btn-icon bg-blue-600 hover:bg-blue-700"><i data-lucide="history" class="w-5 h-5"></i></button>
                         <button id="manageCpBtn" title="Gestisci Punti" class="btn-icon bg-brand-green hover:bg-[#004d2c]"><i data-lucide="map" class="w-5 h-5"></i></button>
                         <button id="manageTeamsBtn" title="Gestisci Squadre" class="btn-icon bg-brand-orange hover:bg-[#e67300]"><i data-lucide="users" class="w-5 h-5"></i></button>
+                        <button id="judgeRoomBtn" title="Sala Giudici" class="btn-icon bg-purple-600 hover:bg-purple-700"><i data-lucide="gavel" class="w-5 h-5"></i></button>
                     </div>
                 </div>
             </header>
@@ -242,6 +260,42 @@
             </div>
         </div>
 
+        <div id="organizerJudgeListView" class="hidden">
+            <div class="bg-white p-6 rounded-xl shadow-lg max-w-4xl mx-auto h-[85vh] flex flex-col">
+                <button id="backToDashboardFromJudge" class="mb-4 text-brand-green font-bold flex items-center hover:underline flex-shrink-0">
+                    <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Dashboard
+                </button>
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-3xl font-black text-purple-700 flex items-center gap-2"><i data-lucide="gavel" class="w-8 h-8"></i> Sala Giudici</h2>
+                    <div class="text-sm bg-purple-50 text-purple-800 px-3 py-1 rounded-full border border-purple-200 font-bold">Validazione Prove</div>
+                </div>
+                <div class="overflow-y-auto flex-grow">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-purple-100 text-purple-900 sticky top-0">
+                            <tr>
+                                <th class="p-4 font-bold rounded-tl-lg">Pos.</th>
+                                <th class="p-4 font-bold">Squadra</th>
+                                <th class="p-4 text-center font-bold">Prove Inviate</th>
+                                <th class="p-4 text-right font-bold rounded-tr-lg">Punti Totali</th>
+                                <th class="p-4 text-center">Azione</th>
+                            </tr>
+                        </thead>
+                        <tbody id="judgeListBody" class="divide-y divide-purple-50"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="organizerJudgeDetailView" class="hidden">
+            <div class="bg-white p-6 rounded-xl shadow-lg max-w-6xl mx-auto min-h-[85vh] flex flex-col">
+                <button id="backToJudgeList" class="mb-6 text-purple-700 font-bold flex items-center hover:underline">
+                    <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Lista Squadre
+                </button>
+                <h2 id="judgeTeamName" class="text-3xl font-black text-gray-800 mb-2 border-b pb-4"></h2>
+                <div id="judgeGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto flex-grow p-2"></div>
+            </div>
+        </div>
+
         <div id="organizerAdminView" class="hidden">
             <div class="bg-white p-6 rounded-xl shadow-lg max-w-6xl mx-auto h-[85vh] flex flex-col">
                 <button id="backToDashboardBtn" class="mb-4 text-brand-green font-bold flex items-center hover:underline flex-shrink-0">
@@ -254,6 +308,20 @@
                         <form id="addCheckpointForm" class="space-y-5 bg-gray-50 p-6 rounded-lg border border-gray-200">
                             <input type="hidden" id="editCheckpointId">
                             
+                            <div>
+                                <label class="block text-sm font-bold mb-1">Tipo di Prova</label>
+                                <div class="flex gap-4">
+                                    <label class="flex items-center space-x-2 cursor-pointer">
+                                        <input type="radio" name="cpType" value="text" checked class="form-radio text-brand-green w-5 h-5">
+                                        <span class="font-bold text-gray-700">Testuale (Domanda)</span>
+                                    </label>
+                                    <label class="flex items-center space-x-2 cursor-pointer">
+                                        <input type="radio" name="cpType" value="selfie" class="form-radio text-brand-orange w-5 h-5">
+                                        <span class="font-bold text-gray-700">Selfie (Foto)</span>
+                                    </label>
+                                </div>
+                            </div>
+
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
                                     <label for="cp-number" class="block text-sm font-bold mb-1">Numero (#)</label>
@@ -266,7 +334,7 @@
                             </div>
 
                             <div>
-                                <label for="cp-question" class="block text-sm font-bold mb-1">Domanda / Indizio</label>
+                                <label for="cp-question" id="lbl-question" class="block text-sm font-bold mb-1">Domanda / Indizio</label>
                                 <textarea id="cp-question" name="question" required rows="3" class="w-full p-2 border rounded-md"></textarea>
                             </div>
 
@@ -275,14 +343,15 @@
                                 <textarea id="cp-description" name="description" rows="3" class="w-full p-2 border rounded-md text-sm text-gray-600" placeholder="Es. Cenni storici sul monumento, testo da leggere..."></textarea>
                             </div>
 
-                            <div>
-                                <label for="cp-placeholder" class="block text-sm font-bold mb-1">Esempio Risposta (Placeholder)</label>
-                                <input type="text" id="cp-placeholder" name="placeholder" class="w-full p-2 border rounded-md text-sm text-gray-500 italic" placeholder="Es. 1860 (compare dentro la casella di risposta)">
-                            </div>
-
-                            <div>
-                                <label for="cp-correctAnswer" class="block text-sm font-bold mb-1">Risposta Esatta</label>
-                                <input type="text" id="cp-correctAnswer" name="correctAnswer" required class="w-full p-2 border rounded-md bg-green-50 border-green-200">
+                            <div id="text-only-fields" class="space-y-5">
+                                <div>
+                                    <label for="cp-placeholder" class="block text-sm font-bold mb-1">Esempio Risposta (Placeholder)</label>
+                                    <input type="text" id="cp-placeholder" name="placeholder" class="w-full p-2 border rounded-md text-sm text-gray-500 italic" placeholder="Es. 1860">
+                                </div>
+                                <div>
+                                    <label for="cp-correctAnswer" class="block text-sm font-bold mb-1">Risposta Esatta</label>
+                                    <input type="text" id="cp-correctAnswer" name="correctAnswer" class="w-full p-2 border rounded-md bg-green-50 border-green-200">
+                                </div>
                             </div>
                             
                             <div>
@@ -329,7 +398,7 @@
                     <div class="ml-3">
                         <p class="font-bold text-sm uppercase">Attenzione alla Compilazione</p>
                         <p class="text-sm mt-1">
-                            Scrivete le risposte con precisione. Osservate il <strong>testo di esempio (in grigio)</strong> che appare nella casella prima di scrivere: vi suggerisce il formato corretto (es. date, nomi, spazi).
+                            Scrivete le risposte con precisione. Osservate il <strong>testo di esempio</strong>. Se richiesto un <strong>Selfie</strong>, la risposta testuale verrà ignorata.
                         </p>
                     </div>
                 </div>
@@ -352,15 +421,16 @@
                     <form id="submissionForm" class="space-y-6">
                         <input type="hidden" id="checkpointIdInput">
                         <input type="hidden" id="teamIdInput">
+                        <input type="hidden" id="checkpointTypeInput">
                         
-                        <div>
+                        <div id="text-input-container">
                             <label for="answer" class="block text-lg font-bold mb-2 text-gray-800">La tua risposta:</label>
-                            <input type="text" id="answer" name="answer" required class="w-full p-4 border-2 border-gray-300 rounded-lg text-lg focus:border-brand-orange" placeholder="Scrivi qui...">
+                            <input type="text" id="answer" name="answer" class="w-full p-4 border-2 border-gray-300 rounded-lg text-lg focus:border-brand-orange" placeholder="Scrivi qui...">
                         </div>
                         
-                        <div class="bg-blue-50 p-4 rounded-lg border border-blue-100">
-                            <p class="block text-md font-bold mb-2 text-blue-800 flex items-center"><i data-lucide="camera" class="w-5 h-5 mr-2"></i> Scatta/Carica Foto:</p>
-                            <input type="file" id="photo" name="photo" accept="image/*" required class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
+                        <div id="photo-input-container" class="bg-blue-50 p-4 rounded-lg border border-blue-100 hidden">
+                            <p class="block text-md font-bold mb-2 text-blue-800 flex items-center"><i data-lucide="camera" class="w-5 h-5 mr-2"></i> Scatta il Selfie:</p>
+                            <input type="file" id="photo" name="photo" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
                             <div id="photo-preview-container" class="mt-4"></div>
                         </div>
                         
