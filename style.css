@@ -1,42 +1,24 @@
-/*
-    Foglio di Stile Personalizzato - Stile Orienteering Piacenza
-    Focus: Branding, Tipografia e Componenti Base.
-    Il Layout è gestito interamente da Tailwind nel file HTML.
-*/
-
-/* --- VARIABILI & BRANDING --- */
 :root {
     --font-body: 'Roboto', sans-serif;
     --font-heading: 'Montserrat', sans-serif;
-    --primary-green: #005935;
-    --primary-orange: #ff8000;
-    --dark-text: #333333;
-    --light-background: #f4f4f5;
-    --white: #ffffff;
 }
 
-/* --- BASE --- */
 body {
     font-family: var(--font-body);
-    color: var(--dark-text);
-    background-color: var(--light-background);
-    -webkit-font-smoothing: antialiased; /* Testo più nitido */
+    -webkit-font-smoothing: antialiased;
 }
 
 h1, h2, h3 {
     font-family: var(--font-heading);
-    color: var(--primary-green);
 }
 
 h1 { font-weight: 900; }
 h2, h3 { font-weight: 700; }
 
-/* --- COMPONENTI: BOTTONI --- */
 .btn {
-    color: var(--white);
-    border-radius: 0.375rem; /* rounded-md */
+    color: #ffffff;
     transition: all 0.2s ease-in-out;
-    font-weight: 600;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.025em;
     display: inline-flex;
@@ -44,86 +26,69 @@ h2, h3 { font-weight: 700; }
     justify-content: center;
 }
 
-.btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
-}
-
-.btn:active {
-    transform: translateY(0);
-}
-
 .btn-primary {
-    background-color: var(--primary-orange);
+    background-color: #FF0099;
+    clip-path: polygon(5% 0, 100% 0, 100% 70%, 95% 100%, 0 100%, 0 30%);
+    border-radius: 0;
+    box-shadow: 0 0 15px rgba(255, 0, 153, 0.2);
 }
+
 .btn-primary:hover {
-    background-color: #e67300;
+    background-color: #cc007a;
+    transform: scale(1.02);
 }
 
 .btn-secondary {
-    background-color: var(--primary-green);
-}
-.btn-secondary:hover {
-    background-color: #004d2c;
+    background-color: #2E7D32;
+    border-radius: 0.375rem;
 }
 
-/* Pulsanti Icona (piccoli) */
+.btn-secondary:hover {
+    background-color: #1B5E20;
+    transform: scale(1.02);
+}
+
 .btn-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0.5rem;
-    color: var(--white);
+    color: #ffffff;
     border-radius: 0.5rem;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease-in-out;
 }
 
-/* --- COMPONENTI: INPUT --- */
-input[type="text"],
-input[type="email"],
-input[type="password"],
-input[type="number"],
-textarea,
-select {
+.btn-icon:hover {
+    transform: scale(1.05);
+}
+
+.hover\:bg-\[\#004d2c\]:hover { 
+    background-color: #cc007a !important; 
+}
+
+.hover\:bg-\[\#e67300\]:hover { 
+    background-color: #1B5E20 !important; 
+}
+
+input[type="text"], input[type="email"], input[type="password"], input[type="number"], textarea, select {
     border: 1px solid #d1d5db;
     border-radius: 0.375rem;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-input:focus,
-textarea:focus,
-select:focus {
-    outline: none;
-    border-color: var(--primary-green);
-    box-shadow: 0 0 0 3px rgba(0, 89, 53, 0.1);
-}
-
-/* --- UTILITY VISIVE --- */
-/* Animazione Caricamento */
 .animate-spin {
     animation: spin 1s linear infinite;
 }
+
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
 
-/* Colori Brand per Tailwind (Fallback se config JS fallisce) */
-.text-brand-green { color: var(--primary-green); }
-.bg-brand-green { background-color: var(--primary-green); }
-.hover\:bg-brand-green:hover { background-color: #004d2c; }
-
-.text-brand-orange { color: var(--primary-orange); }
-.bg-brand-orange { background-color: var(--primary-orange); }
-
-/* --- SALVAVITA VISIVO --- */
-/* Fondamentale per nascondere le viste prima che Tailwind carichi o se c'è un errore */
 .hidden {
     display: none !important;
 }
 
-/* --- FIX BROWSER --- */
-/* Nasconde l'occhio e la croce di default di Edge/IE nei campi password */
 input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
     display: none;
