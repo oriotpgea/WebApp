@@ -288,9 +288,16 @@
 
         <div id="organizerJudgeDetailView" class="hidden">
             <div class="bg-white p-6 rounded-xl shadow-lg max-w-6xl mx-auto min-h-[85vh] flex flex-col">
-                <button id="backToJudgeList" class="mb-6 text-purple-700 font-bold flex items-center hover:underline">
-                    <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Lista Squadre
-                </button>
+                <div class="flex justify-between items-start mb-6">
+                    <button id="backToJudgeList" class="text-purple-700 font-bold flex items-center hover:underline">
+                        <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Lista Squadre
+                    </button>
+                    <select id="judgeSortOrder" class="p-2 border border-purple-200 rounded-md bg-purple-50 text-sm font-bold text-purple-800 focus:border-purple-500 outline-none cursor-pointer">
+                        <option value="number">Ordine per Numero (#)</option>
+                        <option value="timeDesc">Ordine Cronologico (Più recenti prima)</option>
+                        <option value="timeAsc">Ordine Cronologico (Meno recenti prima)</option>
+                    </select>
+                </div>
                 <h2 id="judgeTeamName" class="text-3xl font-black text-gray-800 mb-2 border-b pb-4"></h2>
                 <div id="judgeGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto flex-grow p-2"></div>
             </div>
@@ -398,7 +405,7 @@
                     <div class="ml-3">
                         <p class="font-bold text-sm uppercase">Attenzione alla Compilazione</p>
                         <p class="text-sm mt-1">
-                            Scrivete le risposte con precisione. Osservate il <strong>testo di esempio</strong>. Se richiesto un <strong>Selfie</strong>, la risposta testuale verrà ignorata.
+                            Scrivete le risposte con precisione. Osservate il <strong>testo di esempio</strong> e scrivete la vostra risposta in modo <strong>analogo</strong>.
                         </p>
                     </div>
                 </div>
@@ -442,6 +449,7 @@
                             Cancella e Riprova
                         </button>
                     </form>
+                    <div id="checkpointDescriptionBox" class="mt-10 hidden"></div>
                 </div>
             </div>
         </div>

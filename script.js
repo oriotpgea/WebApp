@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -13,7 +13,9 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const db = initializeFirestore(app, {
+    localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()})
+});
 const storage = getStorage(app);
 
 // Array viste aggiornato con le nuove schermate Giudici
@@ -156,31 +158,37 @@ async function setupDashboardListener() {
     if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
     try {
         const eventRef = doc(db, "events", currentEventId);
-        const [eventDoc] = await Promise.all([getDoc(eventRef)]);
+        const eventDoc = await getDoc(eventRef);
         
         if (eventDoc.exists()) {
-             // Listener per Submissions: Aggiorna dashboardData e UI in real time
-             const subQ = query(collection(db, "submissions"), where("eventId", "==", currentEventId));
-             unsubscribeDashboard = onSnapshot(subQ, async (subSnap) => {
-                 // Fetch dei dati correlati (Team e Checkpoints)
-                 const teamsSnapshot = await getDocs(collection(db, `events/${currentEventId}/teams`));
-                 const checkpointsSnapshot = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
-                 
-                 dashboardData = {
-                    checkpoints: checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    teams: teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    submissions: subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
-                };
+             const eventData = eventDoc.data();
+             
+             // Letture statiche estratte dal listener
+             const teamsSnapshot = await getDocs(collection(db, `events/${currentEventId}/teams`));
+             const checkpointsSnapshot = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
+             
+             dashboardData = {
+                checkpoints: checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                teams: teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                submissions: []
+            };
+            
+            // Render iniziale dell'infrastruttura tabellare
+            renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
+            
+            const subQ = query(collection(db, "submissions"), where("eventId", "==", currentEventId));
+            unsubscribeDashboard = onSnapshot(subQ, (subSnap) => {
+                dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 
-                const eventData = (await getDoc(eventRef)).data();
-                renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
-                // --- AGGIUNGI QUESTO BLOCCO QUI SOTTO: ---
+                // Aggiornamento selettivo dei contenuti
+                updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+
                 if (currentJudgeTeamId) {
                     const t = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
                     const s = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
                     if (t) renderJudgeDetail(t, dashboardData.checkpoints, s);
                 }
-             });
+            });
         }
     } catch (error) { showModal("Errore Dashboard", error.message); }
 }
@@ -208,55 +216,29 @@ function calculateScore(teamId, checkpoints, submissions) {
     return { score, completed };
 }
 
-function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
+function renderOrganizerUI(eventData, teams, checkpoints) {
     const organizerGrid = document.getElementById('organizerGrid');
     let tableHtml = `<thead class="bg-gray-200"><tr><th class="p-3 text-left">Squadra</th>${checkpoints.map(c => `<th class="p-3 text-center w-20">${c.number}<br><span class="text-xs text-gray-500">${c.cpType === 'selfie' ? '📷' : '📝'}</span></th>`).join('')}</tr></thead><tbody>`;
     
-    // Calcolo Scores per classifica
-    const teamStats = teams.map(team => {
-        const stats = calculateScore(team.id, checkpoints, submissions);
-        return { ...team, ...stats };
-    });
-
-    // Render Grid
     teams.forEach(team => { 
         const isNonComp = team.category === 'non-competitive';
-        const nameBadge = isNonComp ? ` <span class="text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludico</span>` : '';
-        tableHtml += `<tr class="border-b"><td class="p-3 font-medium">${team.name}${nameBadge}</td>${checkpoints.map(c => {
-            const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === c.id);
-            let icon = '<i data-lucide="circle-dashed" class="w-5 h-5 text-gray-400 mx-auto"></i>';
-
-            if (sub) {
-                if (sub.status === 'rejected') {
-                    icon = '<i data-lucide="ban" class="w-5 h-5 text-gray-300 mx-auto"></i>'; 
-                } else if (c.cpType === 'selfie') {
-                    icon = '<i data-lucide="camera" class="w-5 h-5 text-blue-600 mx-auto"></i>';
-                } else {
-                    const isCorrect = c.correctAnswer.toLowerCase().trim() === sub.answer.toLowerCase().trim();
-                    icon = isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600 mx-auto"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500 mx-auto"></i>';
-                }
-            }
-            return `<td class="p-3 text-center align-middle cursor-pointer hover:bg-gray-50" onclick="showOrganizerDetail('${team.id}','${c.id}')">${icon}</td>`;
-        }).join('')}</tr>`;
+        const nameBadge = isNonComp ? ` <span class="text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>` : '';
+        tableHtml += `<tr class="border-b"><td class="p-3 font-medium">${team.name}${nameBadge}</td>`;
+        
+        // Generazione ID univoci per le celle, inserimento stato vuoto di default
+        checkpoints.forEach(c => {
+            tableHtml += `<td id="cell-${team.id}-${c.id}" class="p-3 text-center align-middle cursor-pointer hover:bg-gray-50" onclick="showOrganizerDetail('${team.id}','${c.id}')"><i data-lucide="circle-dashed" class="w-5 h-5 text-gray-400 mx-auto"></i></td>`;
+        });
+        tableHtml += `</tr>`;
     });
     
     organizerGrid.innerHTML = tableHtml + '</tbody>';
-    
-    const leaderboardBody = document.getElementById('leaderboardBody');
-    // MODIFICA: Filtra solo le squadre competitive per la classifica
-    const competitiveStats = teamStats.filter(t => t.category !== 'non-competitive');
-
-    competitiveStats.sort((a, b) => b.score - a.score);
-    teamStats.sort((a, b) => b.score - a.score);
-    leaderboardBody.innerHTML = competitiveStats.map((team, index) => `<tr class="border-b ${index === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${index + 1}</td><td class="p-2">${team.name}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`).join('');
-    
     lucide.createIcons();
     
-    // Helper globale per click griglia
     window.showOrganizerDetail = (teamId, cpId) => {
-        const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cpId);
-        const cp = checkpoints.find(c => c.id === cpId);
-        const tm = teams.find(t => t.id === teamId);
+        const sub = dashboardData.submissions.find(s => s.teamId === teamId && s.checkpointId === cpId);
+        const cp = dashboardData.checkpoints.find(c => c.id === cpId);
+        const tm = dashboardData.teams.find(t => t.id === teamId);
         if(sub && cp && tm) {
              const isCorrect = cp.cpType === 'selfie' ? true : (cp.correctAnswer.toLowerCase().trim() === sub.answer.toLowerCase().trim());
              showSubmissionDetail(sub, cp, isCorrect, tm);
@@ -264,56 +246,118 @@ function renderOrganizerUI(eventData, teams, checkpoints, submissions) {
     };
 }
 
+function updateDashboardDOM(teams, checkpoints, submissions) {
+    const teamStats = teams.map(team => {
+        const stats = calculateScore(team.id, checkpoints, submissions);
+        
+        checkpoints.forEach(cp => {
+            const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === cp.id);
+            const cell = document.getElementById(`cell-${team.id}-${cp.id}`);
+            
+            if (cell) {
+                let iconHtml = '<i data-lucide="circle-dashed" class="w-5 h-5 text-gray-400 mx-auto"></i>';
+                if (sub) {
+                    if (sub.status === 'rejected') {
+                        iconHtml = '<i data-lucide="ban" class="w-5 h-5 text-gray-300 mx-auto"></i>'; 
+                    } else if (cp.cpType === 'selfie') {
+                        iconHtml = '<i data-lucide="camera" class="w-5 h-5 text-blue-600 mx-auto"></i>';
+                    } else {
+                        const isCorrect = cp.correctAnswer.toLowerCase().trim() === sub.answer.toLowerCase().trim();
+                        iconHtml = isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600 mx-auto"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500 mx-auto"></i>';
+                    }
+                }
+                
+                if (cell.innerHTML !== iconHtml) {
+                    cell.innerHTML = iconHtml;
+                    lucide.createIcons({ root: cell });
+                }
+            }
+        });
+        return { ...team, ...stats };
+    });
+
+    const leaderboardBody = document.getElementById('leaderboardBody');
+    teamStats.sort((a, b) => b.score - a.score);
+    
+    leaderboardBody.innerHTML = teamStats.map((team, index) => {
+        const badge = team.category === 'non-competitive' 
+            ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
+            : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
+        return `<tr class="border-b ${index === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${index + 1}</td><td class="p-2">${team.name}${badge}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
+    }).join('');
+}
+
 // Export CSV aggiornato
 document.getElementById('exportCsvBtn').addEventListener('click', () => {
-    if (!dashboardData || !dashboardData.teams.length) return showModal("Attenzione", "Nessun dato.");
-    const teams = dashboardData.teams.filter(t => t.category !== 'non-competitive');
+    if (!dashboardData || !dashboardData.teams.length) return;
+    const teams = dashboardData.teams;
     const { checkpoints, submissions } = dashboardData;
 
     const teamStats = teams.map(team => {
         let score = 0;
+        let lastCorrectTime = 0;
         const teamSubs = [];
         checkpoints.forEach(cp => {
             const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === cp.id);
             let cellText = "-";
-            let color = "#ffffff";
-            let textColor = "#000000";
 
             if (sub) {
                 if (sub.status === 'rejected') {
                     cellText = "ANNULLATO";
-                    color = "#e5e7eb"; textColor = "#9ca3af";
                 } else {
                     cellText = sub.answer || "(Foto)";
+                    let isCorrect = false;
+                    
                     if (cp.cpType === 'selfie') {
-                        score += cp.points;
-                        color = "#dbeafe"; textColor = "#1e40af";
+                        isCorrect = true;
                     } else {
                         if (sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) {
-                            score += cp.points;
-                            color = "#dcfce7"; textColor = "#166534";
-                        } else {
-                            color = "#fee2e2"; textColor = "#991b1b";
+                            isCorrect = true;
                         }
+                    }
+                    
+                    if (isCorrect) {
+                        score += cp.points;
+                        const subTime = sub.timestamp?.toMillis() || 0;
+                        if (subTime > lastCorrectTime) lastCorrectTime = subTime;
                     }
                 }
             }
-            teamSubs.push({ text: cellText, bg: color, color: textColor });
+            cellText = cellText.replace(/"/g, '""');
+            teamSubs.push(`"${cellText}"`);
         });
-        return { name: team.name, score, subs: teamSubs };
+        return { name: team.name, category: team.category, score, lastCorrectTime, subs: teamSubs };
     });
-    teamStats.sort((a, b) => b.score - a.score);
 
-    let tableHtml = `<html><head><meta charset="UTF-8"></head><body><table border="1"><thead><tr style="background:#f0f0f0"><th style="width:200px">Squadra</th>${checkpoints.map(cp => `<th>#${cp.number} (${cp.cpType})</th>`).join('')}<th>TOTALE</th></tr></thead><tbody>`;
-    teamStats.forEach(t => {
-        tableHtml += `<tr><td><b>${t.name}</b></td>${t.subs.map(s => `<td style="background:${s.bg};color:${s.color}">${s.text}</td>`).join('')}<td style="text-align:center"><b>${t.score}</b></td></tr>`;
+    teamStats.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (a.lastCorrectTime === 0) return 1;
+        if (b.lastCorrectTime === 0) return -1;
+        return a.lastCorrectTime - b.lastCorrectTime;
     });
-    tableHtml += `</tbody></table></body></html>`;
-    const blob = new Blob([tableHtml], { type: 'application/vnd.ms-excel' });
+
+    let csvContent = "Squadra;Categoria;" + checkpoints.map(cp => `"#${cp.number} (${cp.cpType})"`).join(";") + ';"ULTIMO ORARIO ESATTO";"TOTALE"\n';
+    
+    const correctAnswersRow = checkpoints.map(cp => {
+        if (cp.cpType === 'selfie') return '"(Foto)"';
+        return `"${(cp.correctAnswer || "").replace(/"/g, '""')}"`;
+    });
+    csvContent += `"RISPOSTE ESATTE";"-";${correctAnswersRow.join(";")};"-";"-"\n`;
+    
+    teamStats.forEach(t => {
+        const catLabel = t.category === 'non-competitive' ? 'Ludico' : 'Competitiva';
+        const safeName = t.name.replace(/"/g, '""');
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : "-";
+        csvContent += `"${safeName}";"${catLabel}";${t.subs.join(";")};"${formattedTime}";"${t.score}"\n`;
+    });
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `Classifica_Finale_${new Date().toISOString().slice(0,10)}.xls`;
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    link.download = "classifica.csv";
+    document.body.appendChild(link); 
+    link.click(); 
+    document.body.removeChild(link);
 });
 
 document.getElementById('backToOrganizerHome').addEventListener('click', () => { if(unsubscribeDashboard) unsubscribeDashboard(); currentEventId = null; showView('organizerHomeView'); });
@@ -332,56 +376,76 @@ function renderJudgeList() {
     const { teams, checkpoints, submissions } = dashboardData;
     const tbody = document.getElementById('judgeListBody');
 
-    // 1. Filtra: prendiamo SOLO i competitivi
-    const competitiveTeams = teams.filter(t => t.category !== 'non-competitive');
-
-    // 2. Calcola stats: Usiamo 'competitiveTeams' (NON 'teams')
-    const stats = competitiveTeams.map(t => {
+    const stats = teams.map(t => {
         const calc = calculateScore(t.id, checkpoints, submissions);
         const subsCount = submissions.filter(s => s.teamId === t.id && s.status !== 'rejected').length;
         return { ...t, ...calc, subsCount };
     }).sort((a,b) => b.score - a.score);
-    
-    // NOTA: Qui c'era il codice duplicato che ho rimosso. 
-    // Ora usa direttamente 'stats' calcolato sopra.
 
-    tbody.innerHTML = stats.map((t, i) => `
+    tbody.innerHTML = stats.map((t, i) => {
+        const badge = t.category === 'non-competitive' 
+            ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">Ludica</span>' 
+            : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-2 py-0.5 rounded-full border border-orange-200">Competitiva</span>';
+        return `
         <tr class="hover:bg-purple-50 transition-colors">
             <td class="p-4 font-bold text-gray-500">#${i+1}</td>
-            <td class="p-4 font-bold text-gray-800 text-lg">${t.name}</td>
+            <td class="p-4 font-bold text-gray-800 text-lg">${t.name}${badge}</td>
             <td class="p-4 text-center"><span class="bg-gray-100 text-gray-700 px-2 py-1 rounded font-mono">${t.subsCount}</span></td>
             <td class="p-4 text-right font-black text-brand-green text-xl">${t.score}</td>
             <td class="p-4 text-center">
                 <button onclick="openJudgeDetail('${t.id}')" class="btn btn-secondary px-4 py-2 text-sm shadow-sm">Esamina</button>
             </td>
         </tr>
-    `).join('');
+    `}).join('');
     
-    // Importante: qui dobbiamo permettere di aprire il dettaglio solo per i team presenti nella lista
     window.openJudgeDetail = (teamId) => {
-        currentJudgeTeamId = teamId; // Ricorda di mantenere questa riga aggiunta prima
-        const team = teams.find(t => t.id === teamId); // Qui usiamo 'teams' generale perché l'ID è univoco
-        const teamSubs = submissions.filter(s => s.teamId === teamId); // Corretto per usare submissions filtrato locale o globale, meglio globale dashboardData.submissions qui
+        currentJudgeTeamId = teamId;
+        const team = teams.find(t => t.id === teamId);
+        const teamSubs = submissions.filter(s => s.teamId === teamId);
         renderJudgeDetail(team, checkpoints, teamSubs);
     };
 }
 
 document.getElementById('backToJudgeList').addEventListener('click', () => showView('organizerJudgeListView'));
 
+document.getElementById('judgeSortOrder').addEventListener('change', () => {
+    if (currentJudgeTeamId && dashboardData) {
+        const team = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
+        const teamSubs = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
+        renderJudgeDetail(team, dashboardData.checkpoints, teamSubs);
+    }
+});
+
 function renderJudgeDetail(team, checkpoints, teamSubs) {
     document.getElementById('judgeTeamName').textContent = "Squadra: " + team.name;
     const grid = document.getElementById('judgeGrid');
     grid.innerHTML = '';
 
-    checkpoints.forEach(cp => {
-        const sub = teamSubs.find(s => s.checkpointId === cp.id);
-        if(!sub) return;
+    const sortOrder = document.getElementById('judgeSortOrder').value;
+    let displayCheckpoints = checkpoints.filter(cp => teamSubs.some(s => s.checkpointId === cp.id));
 
+    if (sortOrder === 'timeDesc' || sortOrder === 'timeAsc') {
+        displayCheckpoints.sort((a, b) => {
+            const subA = teamSubs.find(s => s.checkpointId === a.id);
+            const subB = teamSubs.find(s => s.checkpointId === b.id);
+            const timeA = subA && subA.timestamp ? subA.timestamp.toMillis() : 0;
+            const timeB = subB && subB.timestamp ? subB.timestamp.toMillis() : 0;
+            return sortOrder === 'timeDesc' ? timeB - timeA : timeA - timeB;
+        });
+    } else {
+        displayCheckpoints.sort((a, b) => a.number - b.number);
+    }
+
+    displayCheckpoints.forEach(cp => {
+        const sub = teamSubs.find(s => s.checkpointId === cp.id);
         const isRejected = sub.status === 'rejected';
         const isSelfie = cp.cpType === 'selfie';
         let isCorrect = false;
+        
         if(isSelfie) isCorrect = true; 
         else isCorrect = (sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim());
+
+        const timeString = sub.timestamp ? sub.timestamp.toDate().toLocaleTimeString('it-IT') : '-';
 
         const card = document.createElement('div');
         card.className = `p-4 rounded-lg shadow border-2 flex flex-col ${isRejected ? 'bg-gray-100 border-gray-300 opacity-75' : 'bg-white border-purple-100'}`;
@@ -389,7 +453,10 @@ function renderJudgeDetail(team, checkpoints, teamSubs) {
         card.innerHTML = `
             <div class="flex justify-between items-start mb-3">
                 <span class="font-bold text-purple-700">Punto #${cp.number} (${isSelfie ? 'Selfie' : 'Testo'})</span>
-                <span class="font-bold ${isCorrect ? 'text-green-600' : 'text-red-500'}">${cp.points} pt</span>
+                <div class="text-right">
+                    <span class="font-bold block ${isCorrect ? 'text-green-600' : 'text-red-500'}">${cp.points} pt</span>
+                    <span class="text-xs text-gray-500 font-mono">${timeString}</span>
+                </div>
             </div>
             
             <div class="mb-3 bg-gray-50 p-2 rounded text-sm text-gray-700 italic">"${cp.question}"</div>
@@ -424,7 +491,6 @@ function renderJudgeDetail(team, checkpoints, teamSubs) {
             const ref = doc(db, "submissions", subId);
             if(newStatus) await updateDoc(ref, { status: newStatus });
             else {
-                // Rimuovi il campo status per ripristinare
                 const currentData = (await getDoc(ref)).data();
                 const newData = { ...currentData };
                 delete newData.status;
@@ -572,18 +638,39 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
     showView('checkpointView');
     
     let imageUrlHtml = checkpoint.imageUrl ? `<div class="bg-gray-200 rounded-lg mb-4"><img src="${checkpoint.imageUrl}" alt="Immagine del punto" class="w-full h-48 object-contain rounded-lg"></div>` : '';
-    let descriptionHtml = checkpoint.description ? `<div class="mb-4 text-gray-600 text-sm italic border-l-4 border-gray-300 pl-3">${checkpoint.description.replace(/\n/g, '<br>')}</div>` : '';
 
     const isSelfie = checkpoint.cpType === 'selfie';
     const typeLabel = isSelfie ? '<span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs font-bold uppercase ml-2">Selfie</span>' : '<span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-bold uppercase ml-2">Domanda</span>';
 
+    // Riquadro risposta di esempio
+    let exampleHtml = (!isSelfie && checkpoint.placeholder) ? `
+        <div class="mt-4 bg-blue-50 border-l-4 border-blue-500 p-3 rounded-r shadow-sm">
+            <p class="text-xs font-bold text-blue-800 uppercase mb-1">Risposta di esempio</p>
+            <p class="font-mono text-gray-700">${checkpoint.placeholder}</p>
+        </div>
+    ` : '';
+
     document.getElementById('checkpointDetail').innerHTML = `
         ${imageUrlHtml}
         <h2 class="text-2xl font-bold mb-2 flex items-center">Punto #${checkpoint.number} ${typeLabel}</h2>
-        ${descriptionHtml}
         <p class="text-lg bg-gray-100 p-4 rounded-md font-medium text-gray-800 shadow-inner">${checkpoint.question}</p>
+        ${exampleHtml}
     `;
-    
+
+    // Riquadro "Lo sapevi che..."
+    const descBox = document.getElementById('checkpointDescriptionBox');
+    if (checkpoint.description) {
+        descBox.innerHTML = `
+            <h3 class="text-xl font-bold text-brand-orange mb-3 flex items-center"><i data-lucide="info" class="w-6 h-6 mr-2"></i>Lo sapevi che...</h3>
+            <div class="bg-orange-50 p-4 rounded-lg border border-orange-200 text-gray-700 leading-relaxed shadow-sm">
+                ${checkpoint.description.replace(/\n/g, '<br>')}
+            </div>
+        `;
+        descBox.classList.remove('hidden');
+    } else {
+        descBox.classList.add('hidden');
+    }
+
     document.getElementById('checkpointIdInput').value = checkpoint.id;
     document.getElementById('teamIdInput').value = teamId;
     document.getElementById('checkpointTypeInput').value = checkpoint.cpType || 'text';
@@ -593,7 +680,6 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
     const answerInput = document.getElementById('answer');
     const photoInput = document.getElementById('photo');
 
-    // UI Toggle based on Type
     if (isSelfie) {
         textContainer.classList.add('hidden');
         photoContainer.classList.remove('hidden');
@@ -604,7 +690,7 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         photoContainer.classList.add('hidden');
         answerInput.required = true;
         photoInput.required = false;
-        answerInput.placeholder = checkpoint.placeholder || "Scrivi qui...";
+        answerInput.placeholder = "Scrivi qui la tua risposta...";
     }
 
     const submitButton = document.getElementById('submissionForm').querySelector('button[type="submit"]');
@@ -639,6 +725,8 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         submitButton.disabled = false; 
         submitButton.textContent = 'Invia Risposta';
     }
+
+    lucide.createIcons();
 }
 
 document.getElementById('submissionForm').addEventListener('submit', async (e) => {
@@ -679,7 +767,15 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         
         showModal("Successo", "Risposta inviata!");
         showView('participantView');
-    } catch (error) { showModal("Errore", error.message); submitButton.disabled = false; }
+    } catch (error) { 
+        submitButton.disabled = false; 
+        submitButton.innerHTML = `INVIA RISPOSTA`;
+        if (error.code === 'storage/retry-limit-exceeded' || !navigator.onLine) {
+            showModal("Connessione Assente", "Spostati in un'area con segnale e clicca nuovamente su INVIA. I tuoi dati non sono stati cancellati.");
+        } else {
+            showModal("Errore", error.message); 
+        }
+    }
 });
 
 // Helper e Utility
@@ -726,23 +822,83 @@ document.getElementById('backToDashboardFromLog').addEventListener('click', () =
     showView('organizerDashboardView');
 });
 async function initActivityLogView() {
+    if (!dashboardData) return;
     if (activityLogUnsub) activityLogUnsub();
     const logContainer = document.getElementById('activityLogContainer');
     logContainer.innerHTML = '<i data-lucide="loader-2" class="w-12 h-12 animate-spin text-green-700 mx-auto"></i>';
     showView('activityLogView');
-    // ... Logica Activity View Standard (invariata dal codice originale) ...
-    // Per brevità: qui va la logica activity se serve, altrimenti funziona come da base
+
     const q = query(collection(db, `events/${currentEventId}/activity`), orderBy("timestamp", "desc"));
     activityLogUnsub = onSnapshot(q, (snapshot) => {
          logContainer.innerHTML = '';
-         snapshot.forEach(doc => {
-             const log = doc.data();
-             const time = log.timestamp.toDate().toLocaleTimeString();
+         
+         if (snapshot.empty) {
+             logContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Nessuna attività registrata.</p>';
+             return;
+         }
+
+         snapshot.forEach(docSnap => {
+             const log = docSnap.data();
+             const time = log.timestamp ? log.timestamp.toDate().toLocaleTimeString('it-IT') : '-';
+             
+             const team = dashboardData.teams.find(t => t.id === log.teamId);
+             const teamName = team ? team.name : log.teamId;
+             
+             const cp = dashboardData.checkpoints.find(c => c.id === log.checkpointId);
+             const cpNumber = cp ? cp.number : '?';
+             
+             let actionText = '';
+             let correctnessBadge = '';
+             
+             if (log.type === 'delete') {
+                 actionText = '<span class="text-red-600 font-bold">Eliminazione</span>';
+             } else {
+                 const ans = log.answer || '(Foto)';
+                 actionText = `Invio: <span class="font-mono text-gray-700">"${ans}"</span>`;
+                 
+                 if (cp) {
+                     let isCorrect = false;
+                     if (cp.cpType === 'selfie') {
+                         isCorrect = true;
+                     } else if (log.answer && cp.correctAnswer) {
+                         isCorrect = log.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim();
+                     }
+                     correctnessBadge = isCorrect 
+                        ? '<span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-bold ml-2">ESATTA</span>' 
+                        : '<span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-bold ml-2">ERRATA</span>';
+                 }
+             }
+             
+             let totalSubs = 0;
+             let correctSubs = 0;
+             if (team) {
+                 const teamSubs = dashboardData.submissions.filter(s => s.teamId === log.teamId && s.status !== 'rejected');
+                 totalSubs = teamSubs.length;
+                 teamSubs.forEach(sub => {
+                     const c = dashboardData.checkpoints.find(x => x.id === sub.checkpointId);
+                     if (c) {
+                         if (c.cpType === 'selfie') correctSubs++;
+                         else if (sub.answer && c.correctAnswer && sub.answer.toLowerCase().trim() === c.correctAnswer.toLowerCase().trim()) correctSubs++;
+                     }
+                 });
+             }
+
              const div = document.createElement('div');
-             div.className = "p-3 border-b";
-             div.innerHTML = `<p><strong>${time}</strong>: Squadra ${log.teamId} - ${log.type}</p>`;
+             div.className = "p-4 border-b bg-white hover:bg-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center rounded-lg shadow-sm mb-3 border border-gray-100 gap-4";
+             div.innerHTML = `
+                 <div>
+                     <p class="font-black text-gray-800 text-lg">${time} - ${teamName}</p>
+                     <p class="text-sm text-gray-600 mt-1">Punto #${cpNumber} | ${actionText} ${correctnessBadge}</p>
+                 </div>
+                 <div class="text-right bg-gray-100 p-2 rounded border border-gray-200 min-w-[120px]">
+                     <p class="text-xs text-gray-500 font-bold uppercase mb-1">Status Squadra</p>
+                     <p class="font-bold text-sm text-gray-700">Inviate: ${totalSubs}</p>
+                     <p class="font-bold text-sm text-green-600">Corrette: ${correctSubs}</p>
+                 </div>
+             `;
              logContainer.appendChild(div);
          });
+         lucide.createIcons();
     });
 }
 document.getElementById('manageTeamsBtn').addEventListener('click', () => {
