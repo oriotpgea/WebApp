@@ -19,7 +19,7 @@ const db = initializeFirestore(app, {
 const storage = getStorage(app);
 
 // Array viste aggiornato con le nuove schermate Giudici
-const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'activityLogView', 'organizerJudgeListView', 'organizerJudgeDetailView'];
+const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'activityLogView', 'organizerJudgeListView', 'organizerJudgeDetailView', 'organizerMapView'];
 
 function showView(viewId) {
     views.forEach(id => {
@@ -186,6 +186,7 @@ async function setupDashboardListener() {
                 if (currentJudgeTeamId) {
                     const t = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
                     const s = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
+                    const isJudgeDetailVisible = !document.getElementById('organizerJudgeDetailView').classList.contains('hidden');
                     if (t) renderJudgeDetail(t, dashboardData.checkpoints, s);
                 }
             });
@@ -522,16 +523,45 @@ if(typeRadios.length > 0) {
     });
 }
 
+let adminCheckpointsData = [];
+
+function renderAdminMapMarkers() {
+    const smallContainer = document.getElementById('cpMapExistingMarkers');
+    const largeContainer = document.getElementById('mapPickerExistingMarkers');
+    if (!smallContainer || !largeContainer) return;
+    
+    smallContainer.innerHTML = '';
+    largeContainer.innerHTML = '';
+    
+    const currentEditId = document.getElementById('editCheckpointId').value;
+    
+    adminCheckpointsData.forEach(cp => {
+        if (cp.id === currentEditId || !cp.mapX || !cp.mapY) return;
+        
+        const createMarker = (size, isLarge) => {
+            const m = document.createElement('div');
+            m.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 bg-gray-800 rounded-full border border-white shadow flex items-center justify-center text-white font-bold opacity-70';
+            m.style.left = `${cp.mapX}%`;
+            m.style.top = `${cp.mapY}%`;
+            m.style.width = size;
+            m.style.height = size;
+            m.style.fontSize = isLarge ? '12px' : '9px';
+            m.textContent = cp.number;
+            return m;
+        };
+        
+        smallContainer.appendChild(createMarker('18px', false));
+        largeContainer.appendChild(createMarker('24px', true));
+    });
+}
+
 function startEditCheckpoint(id, data) {
     document.getElementById('editCheckpointId').value = id;
     const form = document.getElementById('addCheckpointForm');
     
     const type = data.cpType || 'text';
     const radio = form.querySelector(`input[name="cpType"][value="${type}"]`);
-    if(radio) {
-        radio.checked = true;
-        radio.dispatchEvent(new Event('change'));
-    }
+    if(radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
 
     form.number.value = data.number; 
     form.question.value = data.question;
@@ -539,26 +569,46 @@ function startEditCheckpoint(id, data) {
     form.placeholder.value = data.placeholder || '';
     form.correctAnswer.value = data.correctAnswer || ''; 
     form.points.value = data.points;
+    form.mapX.value = data.mapX || '';
+    form.mapY.value = data.mapY || '';
+
+    const pin = document.getElementById('cpMapPin');
+    if (data.mapX && data.mapY) {
+        document.getElementById('lbl-mapX').textContent = data.mapX.toFixed(2);
+        document.getElementById('lbl-mapY').textContent = data.mapY.toFixed(2);
+        pin.style.left = `${data.mapX}%`;
+        pin.style.top = `${data.mapY}%`;
+        pin.classList.remove('hidden');
+    } else {
+        document.getElementById('lbl-mapX').textContent = '-';
+        document.getElementById('lbl-mapY').textContent = '-';
+        pin.classList.add('hidden');
+    }
     
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Salva Modifiche';
     submitBtn.classList.replace('btn-secondary', 'btn-primary');
     document.getElementById('cancelEditBtn').classList.remove('hidden');
+    renderAdminMapMarkers();
 }
 
 function resetCheckpointForm() {
     const form = document.getElementById('addCheckpointForm');
-    form.reset(); document.getElementById('editCheckpointId').value = '';
+    form.reset(); 
+    document.getElementById('editCheckpointId').value = '';
+    document.getElementById('cp-mapX').value = '';
+    document.getElementById('cp-mapY').value = '';
+    document.getElementById('lbl-mapX').textContent = '-';
+    document.getElementById('lbl-mapY').textContent = '-';
+    document.getElementById('cpMapPin').classList.add('hidden');
+
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Aggiungi Punto';
     submitBtn.classList.replace('btn-primary', 'btn-secondary');
     document.getElementById('cancelEditBtn').classList.add('hidden');
-    // Reset radio a text
     const radioText = form.querySelector(`input[name="cpType"][value="text"]`);
-    if(radioText) {
-        radioText.checked = true;
-        radioText.dispatchEvent(new Event('change'));
-    }
+    if(radioText) { radioText.checked = true; radioText.dispatchEvent(new Event('change')); }
+    renderAdminMapMarkers();
 }
 
 document.getElementById('cancelEditBtn').addEventListener('click', resetCheckpointForm);
@@ -576,12 +626,18 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
         cpType: cpType
     };
 
+    if (form.mapX.value && form.mapY.value) {
+        data.mapX = parseFloat(form.mapX.value);
+        data.mapY = parseFloat(form.mapY.value);
+    } else {
+        data.mapX = null; data.mapY = null;
+    }
+
     if (cpType === 'text') {
         data.placeholder = form.placeholder.value;
         data.correctAnswer = form.correctAnswer.value;
     } else {
-        data.placeholder = "";
-        data.correctAnswer = "";
+        data.placeholder = ""; data.correctAnswer = "";
     }
 
     const checkpointId = document.getElementById('editCheckpointId').value;
@@ -598,39 +654,121 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
             await uploadBytes(imageRef, imageFile);
             data.imageUrl = await getDownloadURL(imageRef);
         }
-        const docRef = doc(db, `events/${currentEventId}/checkpoints`, finalCheckpointId);
-        await updateDoc(docRef, data);
-        
+        await updateDoc(doc(db, `events/${currentEventId}/checkpoints`, finalCheckpointId), data);
         resetCheckpointForm();
-        
     } catch(error) { showModal("Errore", "Salvataggio fallito: " + error.message); }
 });
 
-document.getElementById('manageCpBtn').addEventListener('click', () => {
+document.getElementById('manageCpBtn').addEventListener('click', async () => {
     if (organizerAdminUnsub) organizerAdminUnsub();
     showView('organizerAdminView');
+    
+    const eventDoc = await getDoc(doc(db, "events", currentEventId));
+    const eventData = eventDoc.data();
+    const mapUrl = eventData.mapUrl || null;
+    
+    const statusText = document.getElementById('eventMapStatus');
+    const selectorContainer = document.getElementById('cpMapSelectorContainer');
+    const mapImage = document.getElementById('cpMapImage');
+
+    if (mapUrl) {
+        statusText.innerHTML = `<a href="${mapUrl}" target="_blank" class="text-blue-600 underline">Mappa attiva</a>`;
+        mapImage.src = mapUrl;
+        selectorContainer.classList.remove('hidden');
+    } else {
+        statusText.textContent = "Nessuna mappa associata.";
+        selectorContainer.classList.add('hidden');
+    }
+
     const checkpointsList = document.getElementById('checkpointsList');
     const checkpointsQuery = query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number"));
     organizerAdminUnsub = onSnapshot(checkpointsQuery, (snapshot) => {
         checkpointsList.innerHTML = snapshot.empty ? '<p>Nessun punto di controllo creato.</p>' : '';
+        adminCheckpointsData = [];
         snapshot.docs.forEach(doc => {
-            const cp = doc.data(); const id = doc.id;
+            const cp = doc.data(); 
+            const id = doc.id;
+            adminCheckpointsData.push({ id, ...cp });
             const item = document.createElement('div');
             item.className = 'p-3 bg-gray-100 rounded-md flex justify-between items-center';
-            item.innerHTML = `<div><p class="font-bold">#${cp.number} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.)</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
+            const locIcon = (cp.mapX && cp.mapY) ? '<i data-lucide="map-pin" class="w-4 h-4 text-green-600 inline ml-2"></i>' : '';
+            item.innerHTML = `<div><p class="font-bold">#${cp.number} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.) ${locIcon}</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
             item.querySelector('.edit-btn').addEventListener('click', () => startEditCheckpoint(id, cp));
             item.querySelector('.delete-btn').addEventListener('click', () => deleteCheckpoint(id));
             checkpointsList.appendChild(item);
         });
+        renderAdminMapMarkers();
         lucide.createIcons();
     });
 });
-document.getElementById('backToDashboardBtn').addEventListener('click', () => showView('organizerDashboardView'));
-async function deleteCheckpoint(id) {
-    showModal("Conferma Eliminazione", "Sei sicuro?", true, async () => {
-        try { await deleteDoc(doc(db, `events/${currentEventId}/checkpoints`, id)); } catch (error) { showModal("Errore", error.message); }
-    });
+
+document.getElementById('eventMapUpload').addEventListener('change', (e) => {
+    document.getElementById('uploadEventMapBtn').classList.toggle('hidden', !e.target.files[0]);
+});
+
+document.getElementById('uploadEventMapBtn').addEventListener('click', async () => {
+    const file = document.getElementById('eventMapUpload').files[0];
+    if (!file) return;
+    try {
+        document.getElementById('uploadEventMapBtn').textContent = "Caricamento...";
+        const mapRef = ref(storage, `maps/${currentEventId}.jpg`);
+        await uploadBytes(mapRef, file);
+        const url = await getDownloadURL(mapRef);
+        await updateDoc(doc(db, "events", currentEventId), { mapUrl: url });
+        document.getElementById('eventMapUpload').value = "";
+        document.getElementById('uploadEventMapBtn').classList.add('hidden');
+        document.getElementById('uploadEventMapBtn').textContent = "Carica";
+        document.getElementById('manageCpBtn').click(); 
+    } catch (e) { showModal("Errore", e.message); }
+});
+
+function updateMapCoordinates(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    document.getElementById('cp-mapX').value = x;
+    document.getElementById('cp-mapY').value = y;
+    document.getElementById('lbl-mapX').textContent = x.toFixed(2);
+    document.getElementById('lbl-mapY').textContent = y.toFixed(2);
+    
+    const pinSmall = document.getElementById('cpMapPin');
+    pinSmall.style.left = `${x}%`;
+    pinSmall.style.top = `${y}%`;
+    pinSmall.classList.remove('hidden');
+
+    const pinLarge = document.getElementById('mapPickerPin');
+    pinLarge.style.left = `${x}%`;
+    pinLarge.style.top = `${y}%`;
+    pinLarge.classList.remove('hidden');
 }
+
+document.getElementById('cpMapArea').addEventListener('click', updateMapCoordinates);
+document.getElementById('mapPickerArea').addEventListener('click', updateMapCoordinates);
+
+document.getElementById('expandMapBtn').addEventListener('click', () => {
+    const modal = document.getElementById('mapPickerModal');
+    document.getElementById('mapPickerImage').src = document.getElementById('cpMapImage').src;
+    
+    const currentX = document.getElementById('cp-mapX').value;
+    const currentY = document.getElementById('cp-mapY').value;
+    const pinLarge = document.getElementById('mapPickerPin');
+    
+    if (currentX && currentY) {
+        pinLarge.style.left = `${currentX}%`;
+        pinLarge.style.top = `${currentY}%`;
+        pinLarge.classList.remove('hidden');
+    } else {
+        pinLarge.classList.add('hidden');
+    }
+    
+    modal.classList.remove('hidden');
+    lucide.createIcons();
+});
+
+document.getElementById('closeMapPickerBtn').addEventListener('click', () => {
+    document.getElementById('mapPickerModal').classList.add('hidden');
+});
 
 // --- GESTIONE PARTECIPANTE ---
 
@@ -914,7 +1052,18 @@ document.getElementById('manageTeamsBtn').addEventListener('click', () => {
     });
 });
 document.getElementById('backToDashboardFromTeams').addEventListener('click', () => showView('organizerDashboardView'));
+document.getElementById('backToDashboardBtn').addEventListener('click', () => {
+    if (organizerAdminUnsub) organizerAdminUnsub();
+    setupDashboardListener();
+    showView('organizerDashboardView');
+});
 
+document.getElementById('refreshDashboardBtn').addEventListener('click', async () => {
+    const icon = document.querySelector('#refreshDashboardBtn i');
+    icon.classList.add('animate-spin');
+    await setupDashboardListener();
+    icon.classList.remove('animate-spin');
+});
 // Toggle Password
 document.querySelectorAll('.toggle-password').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1027,3 +1176,237 @@ document.getElementById('backToOrganizer').addEventListener('click', () => showV
 // Init
 showView('loadingView');
 lucide.createIcons();
+
+document.getElementById('backToDashboardFromMap').addEventListener('click', () => showView('organizerDashboardView'));
+
+document.getElementById('liveMapBtn').addEventListener('click', async () => {
+    showView('organizerMapView');
+    if (!dashboardData) return;
+    
+    const eventDoc = await getDoc(doc(db, "events", currentEventId));
+    const mapUrl = eventDoc.data().mapUrl;
+    
+    const container = document.getElementById('liveMapContainer');
+    const sidebar = document.getElementById('liveMapSidebar');
+    const noData = document.getElementById('liveMapNoData');
+    
+    if (!mapUrl) {
+        container.classList.add('hidden');
+        sidebar.classList.add('hidden');
+        noData.classList.remove('hidden');
+        return;
+    }
+    
+    container.classList.remove('hidden');
+    sidebar.classList.remove('hidden');
+    noData.classList.add('hidden');
+    document.getElementById('liveMapBase').src = mapUrl;
+    
+    initMapTeamSelector();
+    renderLiveMap();
+});
+
+function initMapTeamSelector() {
+    const selector = document.getElementById('mapTeamSelector');
+    selector.innerHTML = '';
+    if (!dashboardData) return;
+
+    const { teams, checkpoints, submissions } = dashboardData;
+    const teamStats = teams.map(team => {
+        const stats = calculateScore(team.id, checkpoints, submissions);
+        return { ...team, score: stats.score };
+    }).sort((a,b) => b.score - a.score);
+
+    const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+    teamStats.forEach((t, i) => {
+        const color = colors[i % colors.length];
+        const div = document.createElement('div');
+        div.className = "flex items-center p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 transition-colors cursor-pointer bg-white shadow-sm";
+        div.innerHTML = `
+            <input type="checkbox" id="map-team-${t.id}" value="${t.id}" data-color="${color}" class="map-team-cb w-4 h-4 mr-3 cursor-pointer text-teal-600 focus:ring-teal-500 rounded" ${i < 3 ? 'checked' : ''}>
+            <label for="map-team-${t.id}" class="flex-grow cursor-pointer font-bold text-sm text-gray-700 truncate" title="${t.name}">#${i+1} ${t.name} <br><span class="text-xs text-gray-500 font-normal">${t.score} pt</span></label>
+            <div class="w-4 h-4 rounded-full border shadow-sm" style="background-color: ${color}"></div>
+        `;
+        selector.appendChild(div);
+    });
+
+    document.querySelectorAll('.map-team-cb').forEach(cb => {
+        cb.addEventListener('change', renderMapPaths);
+    });
+}
+
+function renderLiveMap() {
+    if (!dashboardData || document.getElementById('organizerMapView').classList.contains('hidden')) return;
+    
+    const staticContainer = document.getElementById('liveMapStaticMarkers');
+    staticContainer.innerHTML = '';
+    
+    const { checkpoints, submissions } = dashboardData;
+    
+    const cpVisits = {};
+    checkpoints.forEach(cp => cpVisits[cp.id] = 0);
+    
+    submissions.forEach(sub => {
+        if (sub.status !== 'rejected') {
+            const cp = checkpoints.find(c => c.id === sub.checkpointId);
+            if (cp) {
+                let isCorrect = false;
+                if (cp.cpType === 'selfie') isCorrect = true;
+                else if (sub.answer && cp.correctAnswer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) isCorrect = true;
+                
+                if (isCorrect) cpVisits[cp.id]++;
+            }
+        }
+    });
+
+    const maxVisits = Math.max(1, ...Object.values(cpVisits));
+
+    checkpoints.forEach(cp => {
+        if (!cp.mapX || !cp.mapY) return;
+        
+        const visits = cpVisits[cp.id];
+        const intensity = visits / maxVisits;
+        const size = 18 + (intensity * 14); 
+        const opacity = 0.6 + (intensity * 0.4);
+        
+        const marker = document.createElement('div');
+        marker.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow flex items-center justify-center font-bold text-white transition-all';
+        marker.style.left = `${cp.mapX}%`;
+        marker.style.top = `${cp.mapY}%`;
+        marker.style.width = `${size}px`;
+        marker.style.height = `${size}px`;
+        marker.style.backgroundColor = visits === 0 ? '#9ca3af' : `rgba(220, 38, 38, ${opacity})`;
+        marker.style.zIndex = visits === 0 ? '1' : '5';
+        marker.style.fontSize = `${size * 0.45}px`;
+        marker.textContent = cp.number;
+        marker.title = `Punto #${cp.number} - ${visits} transiti`;
+        
+        staticContainer.appendChild(marker);
+    });
+
+    renderMapPaths();
+}
+
+function renderMapPaths() {
+    if (!dashboardData) return;
+    const pathsContainer = document.getElementById('liveMapPaths');
+    pathsContainer.innerHTML = '';
+
+    const selectedCheckboxes = Array.from(document.querySelectorAll('.map-team-cb:checked'));
+    if (selectedCheckboxes.length === 0) return;
+
+    const { checkpoints, submissions } = dashboardData;
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.style.position = "absolute";
+    svg.style.top = "0";
+    svg.style.left = "0";
+    svg.style.width = "100%";
+    svg.style.height = "100%";
+    svg.style.pointerEvents = "none";
+    svg.style.overflow = "visible";
+    
+    const htmlOverlay = document.createElement('div');
+    htmlOverlay.className = "absolute top-0 left-0 w-full h-full pointer-events-none";
+
+    selectedCheckboxes.forEach(cb => {
+        const teamId = cb.value;
+        const color = cb.getAttribute('data-color');
+        const team = dashboardData.teams.find(t => t.id === teamId);
+        if(!team) return;
+        
+        const validSubs = [];
+        checkpoints.forEach(cp => {
+            if (!cp.mapX || !cp.mapY) return;
+            const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id && s.status !== 'rejected');
+            if (sub) {
+                let isCorrect = false;
+                if (cp.cpType === 'selfie') isCorrect = true;
+                else if (sub.answer && cp.correctAnswer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) isCorrect = true;
+
+                if (isCorrect) {
+                    validSubs.push({ cp, time: sub.timestamp?.toMillis() || 0 });
+                }
+            }
+        });
+
+        validSubs.sort((a, b) => a.time - b.time);
+
+        if (validSubs.length > 0) {
+            for(let i = 0; i < validSubs.length - 1; i++) {
+                const start = validSubs[i].cp;
+                const end = validSubs[i+1].cp;
+                const line = document.createElementNS(svgNS, "line");
+                line.setAttribute("x1", `${start.mapX}%`);
+                line.setAttribute("y1", `${start.mapY}%`);
+                line.setAttribute("x2", `${end.mapX}%`);
+                line.setAttribute("y2", `${end.mapY}%`);
+                line.setAttribute("stroke", color);
+                line.setAttribute("stroke-width", "4");
+                line.setAttribute("stroke-dasharray", "12,4");
+                line.setAttribute("opacity", "1");
+                svg.appendChild(line);
+            }
+
+            const last = validSubs[validSubs.length - 1].cp;
+            const labelDiv = document.createElement('div');
+            labelDiv.className = 'absolute transform -translate-x-1/2 -translate-y-full pb-3 z-30 transition-all';
+            labelDiv.style.left = `${last.mapX}%`;
+            labelDiv.style.top = `${last.mapY}%`;
+            labelDiv.innerHTML = `<div style="background-color:${color}" class="text-white text-xs font-bold px-2 py-1 rounded shadow-lg border-2 border-white whitespace-nowrap">${team.name}</div>
+            <div class="absolute bottom-1 left-1/2 transform -translate-x-1/2 w-4 h-4 rounded-full border-2 border-white shadow-md" style="background-color:${color}"></div>`;
+            htmlOverlay.appendChild(labelDiv);
+        }
+    });
+
+    pathsContainer.appendChild(svg);
+    pathsContainer.appendChild(htmlOverlay);
+}
+
+document.getElementById('syncMapBtn').addEventListener('click', () => {
+    const icon = document.querySelector('#syncMapBtn i');
+    icon.classList.add('animate-spin');
+    setTimeout(() => {
+        renderLiveMap();
+        icon.classList.remove('animate-spin');
+    }, 500);
+});
+
+document.getElementById('toggleFullscreenBtn').addEventListener('click', () => {
+    const container = document.getElementById('liveMapContainer');
+    if (!document.fullscreenElement) {
+        if (container.requestFullscreen) {
+            container.requestFullscreen().catch(err => console.error(err));
+        } else if (container.webkitRequestFullscreen) {
+            container.webkitRequestFullscreen();
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        }
+    }
+});
+
+document.addEventListener('fullscreenchange', () => {
+    const btn = document.getElementById('toggleFullscreenBtn');
+    if (document.fullscreenElement) {
+        btn.innerHTML = '<i data-lucide="minimize" class="w-5 h-5 pointer-events-none"></i>';
+    } else {
+        btn.innerHTML = '<i data-lucide="maximize" class="w-5 h-5 pointer-events-none"></i>';
+    }
+    lucide.createIcons();
+});
+
+document.addEventListener('webkitfullscreenchange', () => {
+    const btn = document.getElementById('toggleFullscreenBtn');
+    if (document.webkitFullscreenElement) {
+        btn.innerHTML = '<i data-lucide="minimize" class="w-5 h-5 pointer-events-none"></i>';
+    } else {
+        btn.innerHTML = '<i data-lucide="maximize" class="w-5 h-5 pointer-events-none"></i>';
+    }
+    lucide.createIcons();
+});
