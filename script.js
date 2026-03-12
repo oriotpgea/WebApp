@@ -37,6 +37,8 @@ let currentUserId = null;
 let participantListenerUnsub = null;
 let activityLogUnsub = null;
 let unsubscribeDashboard = null;
+let unsubscribeTeams = null;
+let unsubscribeCheckpoints = null;
 let organizerHomeUnsub = null;
 let organizerTeamsUnsub = null;
 let organizerAdminUnsub = null;
@@ -59,7 +61,8 @@ onAuthStateChanged(auth, async user => {
                 initOrganizerHomeView(user);
             } else {
                 currentUserRole = 'participant';
-                const savedEventId = localStorage.getItem('currentEventId-' + user.uid);
+                const userData = userDoc.exists() ? userDoc.data() : {};
+                const savedEventId = userData.currentEventId || localStorage.getItem('currentEventId-' + user.uid);
                 if (savedEventId) {
                     const eventDoc = await getDoc(doc(db, "events", savedEventId));
                     if (eventDoc.exists()) {
@@ -156,6 +159,8 @@ async function initOrganizerDashboardView() { showView('organizerDashboardView')
 
 async function setupDashboardListener() {
     if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
+    if(unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
+    if(unsubscribeCheckpoints) { unsubscribeCheckpoints(); unsubscribeCheckpoints = null; }
     try {
         const eventRef = doc(db, "events", currentEventId);
         const eventDoc = await getDoc(eventRef);
@@ -163,31 +168,51 @@ async function setupDashboardListener() {
         if (eventDoc.exists()) {
              const eventData = eventDoc.data();
              
-             // Letture statiche estratte dal listener
-             const teamsSnapshot = await getDocs(collection(db, `events/${currentEventId}/teams`));
-             const checkpointsSnapshot = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
-             
              dashboardData = {
-                checkpoints: checkpointsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                teams: teamsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                checkpoints: [],
+                teams: [],
                 submissions: []
             };
+
+            const badge = document.getElementById('dashboardEventStatus');
+            if (badge) {
+                const st = eventData.status;
+                if (st === 'pending') badge.innerHTML = '<span class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-bold border border-yellow-200">In Attesa</span>';
+                else if (st === 'active') badge.innerHTML = '<span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-bold border border-green-200">In Corso</span>';
+                else badge.innerHTML = '<span class="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-bold border border-gray-300">Terminata</span>';
+            }
             
-            // Render iniziale dell'infrastruttura tabellare
-            renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
+            unsubscribeTeams = onSnapshot(collection(db, `events/${currentEventId}/teams`), (snap) => {
+                dashboardData.teams = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (dashboardData.checkpoints.length > 0) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+            });
+
+            unsubscribeCheckpoints = onSnapshot(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")), (snap) => {
+                dashboardData.checkpoints = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
+                updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+            });
             
             const subQ = query(collection(db, "submissions"), where("eventId", "==", currentEventId));
             unsubscribeDashboard = onSnapshot(subQ, (subSnap) => {
                 dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                
-                // Aggiornamento selettivo dei contenuti
                 updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+
+                const mapView = document.getElementById('organizerMapView');
+                if (mapView && !mapView.classList.contains('hidden')) {
+                    const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
+                    initMapTeamSelector();
+                    document.querySelectorAll('.map-team-cb').forEach(cb => {
+                        if (checkedTeams.includes(cb.value)) cb.checked = true;
+                    });
+                    renderLiveMap();
+                }
 
                 if (currentJudgeTeamId) {
                     const t = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
                     const s = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
                     const isJudgeDetailVisible = !document.getElementById('organizerJudgeDetailView').classList.contains('hidden');
-                    if (t) renderJudgeDetail(t, dashboardData.checkpoints, s);
+                    if (t && isJudgeDetailVisible) renderJudgeDetail(t, dashboardData.checkpoints, s);
                 }
             });
         }
@@ -361,7 +386,13 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
     document.body.removeChild(link);
 });
 
-document.getElementById('backToOrganizerHome').addEventListener('click', () => { if(unsubscribeDashboard) unsubscribeDashboard(); currentEventId = null; showView('organizerHomeView'); });
+document.getElementById('backToOrganizerHome').addEventListener('click', () => { 
+    if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
+    if(unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
+    if(unsubscribeCheckpoints) { unsubscribeCheckpoints(); unsubscribeCheckpoints = null; }
+    currentEventId = null; 
+    showView('organizerHomeView'); 
+});
 
 // --- SALA GIUDICI ---
 document.getElementById('judgeRoomBtn').addEventListener('click', initJudgeRoom);
@@ -401,9 +432,10 @@ function renderJudgeList() {
     
     window.openJudgeDetail = (teamId) => {
         currentJudgeTeamId = teamId;
-        const team = teams.find(t => t.id === teamId);
-        const teamSubs = submissions.filter(s => s.teamId === teamId);
-        renderJudgeDetail(team, checkpoints, teamSubs);
+        const team = dashboardData.teams.find(t => t.id === teamId);
+        const teamSubs = dashboardData.submissions.filter(s => s.teamId === teamId);
+        showView('organizerJudgeDetailView');
+        renderJudgeDetail(team, dashboardData.checkpoints, teamSubs);
     };
 }
 
@@ -485,7 +517,6 @@ function renderJudgeDetail(team, checkpoints, teamSubs) {
         grid.appendChild(card);
     });
     lucide.createIcons();
-    showView('organizerJudgeDetailView');
 
     window.toggleSubStatus = async (subId, newStatus) => {
         try {
@@ -564,6 +595,7 @@ function startEditCheckpoint(id, data) {
     if(radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
 
     form.number.value = data.number; 
+    form.name.value = data.name || '';
     form.question.value = data.question;
     form.description.value = data.description || '';
     form.placeholder.value = data.placeholder || '';
@@ -620,6 +652,7 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
     
     const data = {
         number: parseInt(form.number.value),
+        name: form.name.value.trim(),
         question: form.question.value,
         description: form.description.value,
         points: parseInt(form.points.value),
@@ -692,7 +725,8 @@ document.getElementById('manageCpBtn').addEventListener('click', async () => {
             const item = document.createElement('div');
             item.className = 'p-3 bg-gray-100 rounded-md flex justify-between items-center';
             const locIcon = (cp.mapX && cp.mapY) ? '<i data-lucide="map-pin" class="w-4 h-4 text-green-600 inline ml-2"></i>' : '';
-            item.innerHTML = `<div><p class="font-bold">#${cp.number} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.) ${locIcon}</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
+            const cpName = cp.name ? ` - ${cp.name}` : '';
+            item.innerHTML = `<div><p class="font-bold">#${cp.number}${cpName} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.) ${locIcon}</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
             item.querySelector('.edit-btn').addEventListener('click', () => startEditCheckpoint(id, cp));
             item.querySelector('.delete-btn').addEventListener('click', () => deleteCheckpoint(id));
             checkpointsList.appendChild(item);
@@ -723,7 +757,12 @@ document.getElementById('uploadEventMapBtn').addEventListener('click', async () 
 });
 
 function updateMapCoordinates(e) {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const img = e.currentTarget.querySelector('img');
+    if (!img) return;
+    const rect = img.getBoundingClientRect();
+    
+    if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
     
@@ -788,9 +827,10 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         </div>
     ` : '';
 
+    const titleText = checkpoint.name ? `${checkpoint.name} #${checkpoint.number}` : `Punto #${checkpoint.number}`;
     document.getElementById('checkpointDetail').innerHTML = `
         ${imageUrlHtml}
-        <h2 class="text-2xl font-bold mb-2 flex items-center">Punto #${checkpoint.number} ${typeLabel}</h2>
+        <h2 class="text-2xl font-bold mb-2 flex items-center">${titleText} ${typeLabel}</h2>
         <p class="text-lg bg-gray-100 p-4 rounded-md font-medium text-gray-800 shadow-inner">${checkpoint.question}</p>
         ${exampleHtml}
     `;
@@ -898,7 +938,8 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         const data = { eventId: currentEventId, teamId, checkpointId, answer, timestamp: submissionTimestamp };
         if(photoUrl) data.photoUrl = photoUrl;
 
-        await addDoc(collection(db, "submissions"), data);
+        const submissionId = teamId + "_" + checkpointId;
+        await setDoc(doc(db, "submissions", submissionId), data);
         await addDoc(collection(db, `events/${currentEventId}/activity`), {
             type: 'submit', teamId, checkpointId, answer, photoUrl, timestamp: submissionTimestamp
         });
@@ -1093,6 +1134,7 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
             email: auth.currentUser.email,
             category: category
         });
+        await updateDoc(doc(db, "users", currentUserId), { currentEventId: currentEventId });
         localStorage.setItem('currentEventId-' + currentUserId, currentEventId);
         initParticipantLobbyView();
     } catch (e) { showModal("Errore", e.message); btn.disabled = false; }
@@ -1111,6 +1153,16 @@ function initParticipantLobbyView() {
 }
 async function initParticipantView(teamId, isReadOnly=false) {
     if (participantListenerUnsub) participantListenerUnsub();
+    
+    participantListenerUnsub = onSnapshot(doc(db, "events", currentEventId), (docSnap) => {
+        if (docSnap.exists()) {
+            const isFinished = docSnap.data().status === 'finished';
+            const banner = document.getElementById('game-finished-banner');
+            if (banner) banner.classList.toggle('hidden', !isFinished);
+            const submitBtn = document.querySelector('#submissionForm button[type="submit"]');
+            if (submitBtn) submitBtn.classList.toggle('hidden', isFinished);
+        }
+    });
     try {
         const tDoc = await getDoc(doc(db, `events/${currentEventId}/teams`, teamId));
         if(tDoc.exists()) document.getElementById('participant-team-name-display').textContent = `Squadra: ${tDoc.data().name}`;
@@ -1120,36 +1172,48 @@ async function initParticipantView(teamId, isReadOnly=false) {
         const cpSnap = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
         const checkpoints = cpSnap.docs.map(d=>({id:d.id, ...d.data()}));
         
+        let currentSubs = {};
+        const grid = document.getElementById('checkpointsGrid');
+        grid.innerHTML = '';
+
+        checkpoints.forEach(cp => {
+            const card = document.createElement('div');
+            card.id = `cp-card-${cp.id}`;
+            card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
+            card.innerHTML = `
+                <div id="cp-icon-${cp.id}">${cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-brand-orange"></i>' : '<div class="h-6 mb-1"></div>'}</div>
+                <span class="text-3xl font-black">${cp.number}</span>
+                <div id="cp-check-${cp.id}"></div>
+            `;
+            card.onclick = () => openCheckpoint(cp, teamId, !!currentSubs[cp.id], currentSubs[cp.id], isReadOnly);
+            grid.appendChild(card);
+        });
+        lucide.createIcons({ root: grid });
+        showView('participantView');
+
         onSnapshot(subQ, (snap) => {
-            const subs = {}; snap.forEach(d => subs[d.data().checkpointId] = {id:d.id, ...d.data()});
-            const grid = document.getElementById('checkpointsGrid');
-            grid.innerHTML = '';
+            currentSubs = {};
+            snap.forEach(d => currentSubs[d.data().checkpointId] = {id:d.id, ...d.data()});
+
             checkpoints.forEach(cp => {
-                const sub = subs[cp.id];
-                const isDone = !!sub;
-                const isSelfie = cp.cpType === 'selfie';
+                const isDone = !!currentSubs[cp.id];
+                const card = document.getElementById(`cp-card-${cp.id}`);
+                const iconContainer = document.getElementById(`cp-icon-${cp.id}`);
+                const checkContainer = document.getElementById(`cp-check-${cp.id}`);
 
-                const card = document.createElement('div');
-                // Manteniamo le classi di base, aggiungendo un po' di altezza fissa (h-28) per accomodare l'icona senza sballare il layout
-                card.className = `p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 
-                    ${isDone ? 'bg-green-500 text-white border-green-600' : 'bg-white text-gray-800 border-gray-100 hover:border-brand-orange'}`;
-                
-                // Logica Icona: Se è selfie mostriamo la camera. 
-                // Se il punto è fatto (sfondo verde), l'icona è bianca, altrimenti è arancione.
-                const iconColor = isDone ? 'text-white' : 'text-brand-orange';
-                const cameraIcon = isSelfie ? `<i data-lucide="camera" class="w-6 h-6 mb-1 ${iconColor}"></i>` : '<div class="h-6 mb-1"></div>'; // Il div vuoto serve ad allineare i numeri se vuoi che siano tutti alla stessa altezza, altrimenti toglilo.
+                if (!card) return;
 
-                card.innerHTML = `
-                    ${isSelfie ? cameraIcon : ''}
-                    <span class="text-3xl font-black">${cp.number}</span>
-                    ${isDone ? '<i data-lucide="check" class="mt-1 w-5 h-5 font-bold"></i>' : ''}
-                `;
-                
-                card.onclick = () => openCheckpoint(cp, teamId, isDone, sub, isReadOnly);
-                grid.appendChild(card);
+                if (isDone) {
+                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-green-500 text-white border-green-600';
+                    iconContainer.innerHTML = cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-white"></i>' : '<div class="h-6 mb-1"></div>';
+                    checkContainer.innerHTML = '<i data-lucide="check" class="mt-1 w-5 h-5 font-bold"></i>';
+                } else {
+                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
+                    iconContainer.innerHTML = cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-brand-orange"></i>' : '<div class="h-6 mb-1"></div>';
+                    checkContainer.innerHTML = '';
+                }
             });
-            lucide.createIcons();
-            showView('participantView');
+            lucide.createIcons({ root: grid });
         });
     } catch(e) { console.error(e); }
 }
@@ -1162,7 +1226,7 @@ async function deleteSubmission(subId, teamId, cpId) {
     });
 }
 document.getElementById('backToGrid').addEventListener('click', () => showView('participantView'));
-document.getElementById('logout-participant').addEventListener('click', () => { localStorage.removeItem('currentEventId-'+currentUserId); signOut(auth); });
+document.getElementById('logout-participant').addEventListener('click', () => { signOut(auth); });
 document.getElementById('logout-lobby').addEventListener('click', () => signOut(auth));
 document.getElementById('logout-join').addEventListener('click', () => signOut(auth));
 document.getElementById('closePhotoModalBtn').addEventListener('click', () => document.getElementById('photoModal').classList.add('hidden'));
@@ -1368,10 +1432,19 @@ function renderMapPaths() {
 document.getElementById('syncMapBtn').addEventListener('click', () => {
     const icon = document.querySelector('#syncMapBtn i');
     icon.classList.add('animate-spin');
-    setTimeout(() => {
+    
+    if (dashboardData) {
+        const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
+        
+        initMapTeamSelector();
+        
+        document.querySelectorAll('.map-team-cb').forEach(cb => {
+            if (checkedTeams.includes(cb.value)) cb.checked = true;
+        });
+        
         renderLiveMap();
-        icon.classList.remove('animate-spin');
-    }, 500);
+    }
+    setTimeout(() => icon.classList.remove('animate-spin'), 500);
 });
 
 document.getElementById('toggleFullscreenBtn').addEventListener('click', () => {
