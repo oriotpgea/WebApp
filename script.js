@@ -45,11 +45,12 @@ let organizerAdminUnsub = null;
 let judgeListUnsub = null;
 let dashboardData = null;
 let currentJudgeTeamId = null;
+let isDashboardInitialized = false;
+let renderTimeout = null;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
     if (activityLogUnsub) { activityLogUnsub(); activityLogUnsub = null; }
-    if (unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
     if (judgeListUnsub) { judgeListUnsub(); judgeListUnsub = null; }
 
     if (user) {
@@ -158,9 +159,8 @@ document.getElementById('logout-organizer-home').addEventListener('click', () =>
 async function initOrganizerDashboardView() { showView('organizerDashboardView'); setupDashboardListener(); }
 
 async function setupDashboardListener() {
-    if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
-    if(unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
-    if(unsubscribeCheckpoints) { unsubscribeCheckpoints(); unsubscribeCheckpoints = null; }
+    if (isDashboardInitialized) return;
+    isDashboardInitialized = true;
     try {
         const eventRef = doc(db, "events", currentEventId);
         const eventDoc = await getDoc(eventRef);
@@ -184,19 +184,28 @@ async function setupDashboardListener() {
             
             unsubscribeTeams = onSnapshot(collection(db, `events/${currentEventId}/teams`), (snap) => {
                 dashboardData.teams = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                if (dashboardData.checkpoints.length > 0) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                const dashboardView = document.getElementById('organizerDashboardView');
+                if (dashboardData.checkpoints.length > 0 && !dashboardView.classList.contains('hidden')) {
+                    updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                }
             });
 
             unsubscribeCheckpoints = onSnapshot(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")), (snap) => {
                 dashboardData.checkpoints = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
-                updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                const dashboardView = document.getElementById('organizerDashboardView');
+                if (!dashboardView.classList.contains('hidden')) {
+                    updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                }
             });
             
             const subQ = query(collection(db, "submissions"), where("eventId", "==", currentEventId));
             unsubscribeDashboard = onSnapshot(subQ, (subSnap) => {
                 dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                const dashboardView = document.getElementById('organizerDashboardView');
+                if (!dashboardView.classList.contains('hidden')) {
+                    updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                }
 
                 const mapView = document.getElementById('organizerMapView');
                 if (mapView && !mapView.classList.contains('hidden')) {
@@ -273,6 +282,13 @@ function renderOrganizerUI(eventData, teams, checkpoints) {
 }
 
 function updateDashboardDOM(teams, checkpoints, submissions) {
+    if (renderTimeout) clearTimeout(renderTimeout);
+    renderTimeout = setTimeout(() => {
+        executeDashboardDOM(teams, checkpoints, submissions);
+    }, 1500);
+}
+
+function executeDashboardDOM(teams, checkpoints, submissions) {
     const teamStats = teams.map(team => {
         const stats = calculateScore(team.id, checkpoints, submissions);
         
@@ -387,6 +403,7 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
 });
 
 document.getElementById('backToOrganizerHome').addEventListener('click', () => { 
+    isDashboardInitialized = false;
     if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
     if(unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
     if(unsubscribeCheckpoints) { unsubscribeCheckpoints(); unsubscribeCheckpoints = null; }
@@ -396,7 +413,10 @@ document.getElementById('backToOrganizerHome').addEventListener('click', () => {
 
 // --- SALA GIUDICI ---
 document.getElementById('judgeRoomBtn').addEventListener('click', initJudgeRoom);
-document.getElementById('backToDashboardFromJudge').addEventListener('click', () => showView('organizerDashboardView'));
+document.getElementById('backToDashboardFromJudge').addEventListener('click', () => {
+    showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+});
 
 async function initJudgeRoom() {
     if(!dashboardData) await setupDashboardListener(); // Assicuriamoci di avere i dati
@@ -999,6 +1019,7 @@ document.getElementById('activityLogBtn').addEventListener('click', () => initAc
 document.getElementById('backToDashboardFromLog').addEventListener('click', () => {
     if (activityLogUnsub) { activityLogUnsub(); activityLogUnsub = null; }
     showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
 });
 async function initActivityLogView() {
     if (!dashboardData) return;
@@ -1092,18 +1113,21 @@ document.getElementById('manageTeamsBtn').addEventListener('click', () => {
         });
     });
 });
-document.getElementById('backToDashboardFromTeams').addEventListener('click', () => showView('organizerDashboardView'));
+document.getElementById('backToDashboardFromTeams').addEventListener('click', () => {
+    showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+});
 document.getElementById('backToDashboardBtn').addEventListener('click', () => {
     if (organizerAdminUnsub) organizerAdminUnsub();
-    setupDashboardListener();
     showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
 });
 
 document.getElementById('refreshDashboardBtn').addEventListener('click', async () => {
     const icon = document.querySelector('#refreshDashboardBtn i');
     icon.classList.add('animate-spin');
-    await setupDashboardListener();
-    icon.classList.remove('animate-spin');
+    if (dashboardData) executeDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+    setTimeout(() => icon.classList.remove('animate-spin'), 500);
 });
 // Toggle Password
 document.querySelectorAll('.toggle-password').forEach(btn => {
@@ -1235,13 +1259,19 @@ function showSubmissionDetail(submission, checkpoint, isCorrect, team) {
      document.getElementById('organizerDetailContent').innerHTML = `<p><strong>Squadra:</strong> ${team.name}</p><p><strong>R:</strong> ${submission.answer}</p><p><strong>Ok:</strong> ${isCorrect}</p>${submission.photoUrl ? `<img src="${submission.photoUrl}" class="w-full rounded">` : ''}`;
      showView('organizerDetailView');
 }
-document.getElementById('backToOrganizer').addEventListener('click', () => showView('organizerDashboardView'));
+document.getElementById('backToOrganizer').addEventListener('click', () => {
+    showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+});
 
 // Init
 showView('loadingView');
 lucide.createIcons();
 
-document.getElementById('backToDashboardFromMap').addEventListener('click', () => showView('organizerDashboardView'));
+document.getElementById('backToDashboardFromMap').addEventListener('click', () => {
+    showView('organizerDashboardView');
+    if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+});
 
 document.getElementById('liveMapBtn').addEventListener('click', async () => {
     showView('organizerMapView');
