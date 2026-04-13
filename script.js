@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch, limit, startAfter } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -47,6 +47,8 @@ let dashboardData = null;
 let currentJudgeTeamId = null;
 let isDashboardInitialized = false;
 let renderTimeout = null;
+let lastActivityDoc = null;
+let isFirstActivityLoad = true;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
@@ -228,20 +230,18 @@ async function setupDashboardListener() {
     } catch (error) { showModal("Errore Dashboard", error.message); }
 }
 
-function calculateScore(teamId, checkpoints, submissions) {
+function calculateScore(teamId, checkpoints, submissions, subsMap = null) {
     let score = 0;
     let completed = 0;
     checkpoints.forEach(cp => {
-        const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id);
+        // Se abbiamo il dizionario cerchiamo lì, altrimenti usiamo il vecchio metodo find
+        const sub = subsMap ? subsMap[`${teamId}_${cp.id}`] : submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id);
         
-        // Se non c'è submission o è bocciata (rejected), 0 punti
         if (sub && sub.status !== 'rejected') {
             completed++;
-            // Logica Selfie: Punti dati se la foto c'è (validazione poi manuale in Sala Giudici)
             if (cp.cpType === 'selfie') {
                 score += (cp.points || 0);
             } else {
-                // Logica Testo: Controllo stringa esatta
                 if (cp.correctAnswer && sub.answer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) {
                     score += (cp.points || 0);
                 }
@@ -289,13 +289,17 @@ function updateDashboardDOM(teams, checkpoints, submissions) {
 }
 
 function executeDashboardDOM(teams, checkpoints, submissions) {
-    const teamStats = teams.map(team => {
-        const stats = calculateScore(team.id, checkpoints, submissions);
-        
+    // 1. CREAZIONE DIZIONARIO (HASH MAP) - Risolve Criticità 2
+    const subsMap = {};
+    submissions.forEach(s => {
+        subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+    });
+
+    // 2. AGGIORNAMENTO CELLE (Veloce grazie al dizionario)
+    teams.forEach(team => {
         checkpoints.forEach(cp => {
-            const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === cp.id);
+            const sub = subsMap[`${team.id}_${cp.id}`];
             const cell = document.getElementById(`cell-${team.id}-${cp.id}`);
-            
             if (cell) {
                 let iconHtml = '<i data-lucide="circle-dashed" class="w-5 h-5 text-gray-400 mx-auto"></i>';
                 if (sub) {
@@ -308,25 +312,52 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
                         iconHtml = isCorrect ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600 mx-auto"></i>' : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500 mx-auto"></i>';
                     }
                 }
-                
                 if (cell.innerHTML !== iconHtml) {
                     cell.innerHTML = iconHtml;
                     lucide.createIcons({ root: cell });
                 }
             }
         });
+    });
+
+    // 3. CALCOLO CLASSIFICA
+    const teamStats = teams.map(team => {
+        const stats = calculateScore(team.id, checkpoints, submissions, subsMap);
         return { ...team, ...stats };
     });
 
-    const leaderboardBody = document.getElementById('leaderboardBody');
     teamStats.sort((a, b) => b.score - a.score);
+
+    // 4. RENDERING SCAGLIONATO (TIME SLICING) - Risolve Criticità 3
+    const leaderboardBody = document.getElementById('leaderboardBody');
+    leaderboardBody.innerHTML = ''; // Reset iniziale
     
-    leaderboardBody.innerHTML = teamStats.map((team, index) => {
-        const badge = team.category === 'non-competitive' 
-            ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
-            : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
-        return `<tr class="border-b ${index === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${index + 1}</td><td class="p-2">${team.name}${badge}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
-    }).join('');
+    let currentIndex = 0;
+    const chunkSize = 50; // Renderizziamo 50 squadre alla volta
+
+    function renderNextChunk() {
+        const chunk = teamStats.slice(currentIndex, currentIndex + chunkSize);
+        
+        const html = chunk.map((team, i) => {
+            const globalIndex = currentIndex + i;
+            const badge = team.category === 'non-competitive' 
+                ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
+                : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
+            return `<tr class="border-b ${globalIndex === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${globalIndex + 1}</td><td class="p-2">${team.name}${badge}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
+        }).join('');
+        
+        leaderboardBody.insertAdjacentHTML('beforeend', html);
+        currentIndex += chunkSize;
+
+        // Se ci sono ancora squadre, delega al prossimo frame disponibile
+        if (currentIndex < teamStats.length) {
+            requestAnimationFrame(renderNextChunk);
+        } else {
+            lucide.createIcons({ root: leaderboardBody });
+        }
+    }
+
+    renderNextChunk();
 }
 
 // Export CSV aggiornato
@@ -904,7 +935,7 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
         }
         submitButton.classList.add('hidden');
         deleteButton.classList.toggle('hidden', isReadOnly);
-        deleteButton.onclick = () => deleteSubmission(submission.id, teamId, checkpoint.id);
+        deleteButton.onclick = () => deleteSubmission(submission.id, submission.photoUrl);
         
         if(submission.status === 'rejected') {
             document.getElementById('checkpointDetail').insertAdjacentHTML('beforeend', `<div class="mt-4 bg-red-100 text-red-800 p-3 rounded font-bold border border-red-300">⚠️ QUESTA RISPOSTA È STATA ANNULLATA DAI GIUDICI.</div>`);
@@ -949,7 +980,7 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         let photoUrl = null;
         if (photoFile) {
              const compressedFile = await compressImage(photoFile, 1024, 0.7);
-             const photoRef = ref(storage, `submissions/${currentEventId}/${teamId}_${checkpointId}.jpg`);
+             const photoRef = ref(storage, `submissions/${currentEventId}/${teamId}_${checkpointId}_${Date.now()}.jpg`);
              await uploadBytes(photoRef, compressedFile);
              photoUrl = await getDownloadURL(photoRef);
         }
@@ -978,26 +1009,18 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
 });
 
 // Helper e Utility
-function compressImage(file, maxWidth, quality) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target.result;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                let width = img.width; let height = img.height;
-                if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; }
-                canvas.width = width; canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-                canvas.toBlob((blob) => { resolve(blob); }, 'image/jpeg', quality);
-            };
-            img.onerror = (error) => reject(error);
-        };
-        reader.onerror = (error) => reject(error);
-    });
+async function compressImage(file, maxWidth, quality) {
+    const options = {
+        maxSizeMB: 1,
+        maxWidthOrHeight: maxWidth,
+        useWebWorker: true
+    };
+    try {
+        return await imageCompression(file, options);
+    } catch (error) {
+        console.error("Errore di compressione:", error);
+        throw error;
+    }
 }
 
 // Altri listener standard
@@ -1021,85 +1044,54 @@ document.getElementById('backToDashboardFromLog').addEventListener('click', () =
     showView('organizerDashboardView');
     if (dashboardData) updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
 });
-async function initActivityLogView() {
+async function initActivityLogView(isLoadMore = false) {
     if (!dashboardData) return;
-    if (activityLogUnsub) activityLogUnsub();
     const logContainer = document.getElementById('activityLogContainer');
-    logContainer.innerHTML = '<i data-lucide="loader-2" class="w-12 h-12 animate-spin text-green-700 mx-auto"></i>';
-    showView('activityLogView');
+    
+    if (!isLoadMore) {
+        if (activityLogUnsub) activityLogUnsub();
+        logContainer.innerHTML = '<i data-lucide="loader-2" class="w-12 h-12 animate-spin text-green-700 mx-auto"></i>';
+        lastActivityDoc = null;
+        showView('activityLogView');
+    }
 
-    const q = query(collection(db, `events/${currentEventId}/activity`), orderBy("timestamp", "desc"));
-    activityLogUnsub = onSnapshot(q, (snapshot) => {
-         logContainer.innerHTML = '';
-         
-         if (snapshot.empty) {
-             logContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Nessuna attività registrata.</p>';
-             return;
-         }
+    let q;
+    if (lastActivityDoc) {
+        q = query(collection(db, `events/${currentEventId}/activity`), orderBy("timestamp", "desc"), startAfter(lastActivityDoc), limit(20));
+    } else {
+        q = query(collection(db, `events/${currentEventId}/activity`), orderBy("timestamp", "desc"), limit(20));
+    }
 
-         snapshot.forEach(docSnap => {
-             const log = docSnap.data();
-             const time = log.timestamp ? log.timestamp.toDate().toLocaleTimeString('it-IT') : '-';
-             
-             const team = dashboardData.teams.find(t => t.id === log.teamId);
-             const teamName = team ? team.name : log.teamId;
-             
-             const cp = dashboardData.checkpoints.find(c => c.id === log.checkpointId);
-             const cpNumber = cp ? cp.number : '?';
-             
-             let actionText = '';
-             let correctnessBadge = '';
-             
-             if (log.type === 'delete') {
-                 actionText = '<span class="text-red-600 font-bold">Eliminazione</span>';
-             } else {
-                 const ans = log.answer || '(Foto)';
-                 actionText = `Invio: <span class="font-mono text-gray-700">"${ans}"</span>`;
-                 
-                 if (cp) {
-                     let isCorrect = false;
-                     if (cp.cpType === 'selfie') {
-                         isCorrect = true;
-                     } else if (log.answer && cp.correctAnswer) {
-                         isCorrect = log.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim();
-                     }
-                     correctnessBadge = isCorrect 
-                        ? '<span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-bold ml-2">ESATTA</span>' 
-                        : '<span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-bold ml-2">ERRATA</span>';
-                 }
-             }
-             
-             let totalSubs = 0;
-             let correctSubs = 0;
-             if (team) {
-                 const teamSubs = dashboardData.submissions.filter(s => s.teamId === log.teamId && s.status !== 'rejected');
-                 totalSubs = teamSubs.length;
-                 teamSubs.forEach(sub => {
-                     const c = dashboardData.checkpoints.find(x => x.id === sub.checkpointId);
-                     if (c) {
-                         if (c.cpType === 'selfie') correctSubs++;
-                         else if (sub.answer && c.correctAnswer && sub.answer.toLowerCase().trim() === c.correctAnswer.toLowerCase().trim()) correctSubs++;
-                     }
-                 });
-             }
+    const snapshot = await getDocs(q);
+    if (!isLoadMore) logContainer.innerHTML = '';
+    
+    if (snapshot.empty && !isLoadMore) {
+        logContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Nessuna attività registrata.</p>';
+        return;
+    }
 
-             const div = document.createElement('div');
-             div.className = "p-4 border-b bg-white hover:bg-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center rounded-lg shadow-sm mb-3 border border-gray-100 gap-4";
-             div.innerHTML = `
-                 <div>
-                     <p class="font-black text-gray-800 text-lg">${time} - ${teamName}</p>
-                     <p class="text-sm text-gray-600 mt-1">Punto #${cpNumber} | ${actionText} ${correctnessBadge}</p>
-                 </div>
-                 <div class="text-right bg-gray-100 p-2 rounded border border-gray-200 min-w-[120px]">
-                     <p class="text-xs text-gray-500 font-bold uppercase mb-1">Status Squadra</p>
-                     <p class="font-bold text-sm text-gray-700">Inviate: ${totalSubs}</p>
-                     <p class="font-bold text-sm text-green-600">Corrette: ${correctSubs}</p>
-                 </div>
-             `;
-             logContainer.appendChild(div);
-         });
-         lucide.createIcons();
+    lastActivityDoc = snapshot.docs[snapshot.docs.length - 1];
+
+    snapshot.forEach(docSnap => {
+        const log = docSnap.data();
+        const time = log.timestamp ? log.timestamp.toDate().toLocaleTimeString('it-IT') : '-';
+        const team = dashboardData.teams.find(t => t.id === log.teamId);
+        const teamName = team ? team.name : log.teamId;
+        const cp = dashboardData.checkpoints.find(c => c.id === log.checkpointId);
+        const cpNumber = cp ? cp.number : '?';
+        
+        const div = document.createElement('div');
+        div.className = "p-4 border-b bg-white rounded-lg shadow-sm mb-3 border border-gray-100 flex justify-between items-center";
+        div.innerHTML = `<div><p class="font-bold">${time} - ${teamName}</p><p class="text-sm">Punto #${cpNumber}: ${log.answer || '(Foto)'}</p></div>`;
+        logContainer.appendChild(div);
     });
+    
+    // Gestione visibilità tasto "Carica Altri"
+    const loadMoreBtn = document.getElementById('loadMoreActivityBtn');
+    if (snapshot.docs.length < 20) loadMoreBtn.classList.add('hidden');
+    else loadMoreBtn.classList.remove('hidden');
+
+    lucide.createIcons();
 }
 document.getElementById('manageTeamsBtn').addEventListener('click', () => {
     if (organizerTeamsUnsub) organizerTeamsUnsub();
@@ -1241,10 +1233,12 @@ async function initParticipantView(teamId, isReadOnly=false) {
         });
     } catch(e) { console.error(e); }
 }
-async function deleteSubmission(subId, teamId, cpId) {
+async function deleteSubmission(subId, photoUrl) {
     showModal("Cancella", "Sicuro?", true, async () => {
         await deleteDoc(doc(db, "submissions", subId));
-        await deleteObject(ref(storage, `submissions/${currentEventId}/${teamId}_${cpId}.jpg`)).catch(()=>{});
+        if (photoUrl) {
+            await deleteObject(ref(storage, photoUrl)).catch(()=>{});
+        }
         showModal("Fatto", "Cancellato.");
         showView('participantView');
     });
@@ -1513,3 +1507,5 @@ document.addEventListener('webkitfullscreenchange', () => {
     }
     lucide.createIcons();
 });
+
+document.getElementById('loadMoreActivityBtn').addEventListener('click', () => initActivityLogView(true));

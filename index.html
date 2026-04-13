@@ -36,6 +36,7 @@
 
     <link rel="stylesheet" href="style.css">
     
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
     <script type="module" src="script.js" defer></script>
 </head>
 
@@ -261,6 +262,9 @@
                 <h2 class="text-2xl font-black mb-6 text-center text-gray-800">Log Attività in Tempo Reale</h2>
                 <div id="activityLogContainer" class="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
                     </div>
+                    <button id="loadMoreActivityBtn" class="w-full mt-4 p-3 bg-gray-100 text-gray-600 font-bold rounded-lg hover:bg-gray-200 hidden">
+                        Carica attività precedenti...
+                    </button>
             </div>
         </div>
         
@@ -479,7 +483,7 @@
                         
                         <div id="photo-input-container" class="bg-blue-50 p-4 rounded-lg border border-blue-100 hidden">
                             <p class="block text-md font-bold mb-2 text-blue-800 flex items-center"><i data-lucide="camera" class="w-5 h-5 mr-2"></i> Scatta il Selfie:</p>
-                            <input type="file" id="photo" name="photo" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
+                            <input type="file" id="photo" name="photo" accept="image/*" capture="environment" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
                             <div id="photo-preview-container" class="mt-4"></div>
                         </div>
                         
