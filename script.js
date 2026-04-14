@@ -47,7 +47,9 @@ let dashboardData = null;
 let currentJudgeTeamId = null;
 let isDashboardInitialized = false;
 let renderTimeout = null;
+let mapRenderTimeout = null;
 let lastActivityDoc = null;
+let leaderboardAnimationFrame = null;
 let isFirstActivityLoad = true;
 
 onAuthStateChanged(auth, async user => {
@@ -211,12 +213,15 @@ async function setupDashboardListener() {
 
                 const mapView = document.getElementById('organizerMapView');
                 if (mapView && !mapView.classList.contains('hidden')) {
-                    const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
-                    initMapTeamSelector();
-                    document.querySelectorAll('.map-team-cb').forEach(cb => {
-                        if (checkedTeams.includes(cb.value)) cb.checked = true;
-                    });
-                    renderLiveMap();
+                    if (mapRenderTimeout) clearTimeout(mapRenderTimeout);
+                    mapRenderTimeout = setTimeout(() => {
+                        const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
+                        initMapTeamSelector();
+                        document.querySelectorAll('.map-team-cb').forEach(cb => {
+                            if (checkedTeams.includes(cb.value)) cb.checked = true;
+                        });
+                        renderLiveMap();
+                    }, 1500);
                 }
 
                 if (currentJudgeTeamId) {
@@ -296,6 +301,7 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
     });
 
     // 2. AGGIORNAMENTO CELLE (Veloce grazie al dizionario)
+    let gridChanged = false;
     teams.forEach(team => {
         checkpoints.forEach(cp => {
             const sub = subsMap[`${team.id}_${cp.id}`];
@@ -314,11 +320,12 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
                 }
                 if (cell.innerHTML !== iconHtml) {
                     cell.innerHTML = iconHtml;
-                    lucide.createIcons({ root: cell });
+                    gridChanged = true;
                 }
             }
         });
     });
+    if (gridChanged) lucide.createIcons({ root: document.getElementById('organizerGrid') });
 
     // 3. CALCOLO CLASSIFICA
     const teamStats = teams.map(team => {
@@ -329,6 +336,7 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
     teamStats.sort((a, b) => b.score - a.score);
 
     // 4. RENDERING SCAGLIONATO (TIME SLICING) - Risolve Criticità 3
+    if (leaderboardAnimationFrame) cancelAnimationFrame(leaderboardAnimationFrame);
     const leaderboardBody = document.getElementById('leaderboardBody');
     leaderboardBody.innerHTML = ''; // Reset iniziale
     
@@ -343,7 +351,7 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
             const badge = team.category === 'non-competitive' 
                 ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
                 : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
-            return `<tr class="border-b ${globalIndex === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${globalIndex + 1}</td><td class="p-2">${team.name}${badge}</td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
+            return `<tr class="border-b ${globalIndex === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${globalIndex + 1}</td><td class="p-2"><div class="font-bold">${team.name}${badge}</div><div class="text-xs text-gray-500">${team.email || ''}</div></td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
         }).join('');
         
         leaderboardBody.insertAdjacentHTML('beforeend', html);
@@ -351,9 +359,10 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
 
         // Se ci sono ancora squadre, delega al prossimo frame disponibile
         if (currentIndex < teamStats.length) {
-            requestAnimationFrame(renderNextChunk);
+            leaderboardAnimationFrame = requestAnimationFrame(renderNextChunk);
         } else {
             lucide.createIcons({ root: leaderboardBody });
+            leaderboardAnimationFrame = null;
         }
     }
 
@@ -743,6 +752,17 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
     } catch(error) { showModal("Errore", "Salvataggio fallito: " + error.message); }
 });
 
+async function deleteCheckpoint(id) {
+    showModal("Elimina Punto", "Sei sicuro di voler eliminare questo punto di controllo? La rimozione non cancellerà le risposte già inviate dalle squadre per questo punto.", true, async () => {
+        try {
+            await deleteDoc(doc(db, `events/${currentEventId}/checkpoints`, id));
+            await deleteObject(ref(storage, `checkpoints/${currentEventId}/${id}.jpg`)).catch(()=>{});
+        } catch (error) {
+            showModal("Errore", error.message);
+        }
+    });
+}
+
 document.getElementById('manageCpBtn').addEventListener('click', async () => {
     if (organizerAdminUnsub) organizerAdminUnsub();
     showView('organizerAdminView');
@@ -1078,11 +1098,40 @@ async function initActivityLogView(isLoadMore = false) {
         const team = dashboardData.teams.find(t => t.id === log.teamId);
         const teamName = team ? team.name : log.teamId;
         const cp = dashboardData.checkpoints.find(c => c.id === log.checkpointId);
-        const cpNumber = cp ? cp.number : '?';
         
+        let cpNumber = '?';
+        let iconHtml = '<i data-lucide="circle-dashed" class="w-6 h-6 text-gray-400"></i>';
+        let detailHtml = `Risposta: ${log.answer || '(Nessuna)'}`;
+
+        if (cp) {
+            cpNumber = cp.number;
+            if (cp.cpType === 'selfie') {
+                iconHtml = '<i data-lucide="camera" class="w-6 h-6 text-blue-600"></i>';
+                detailHtml = `Foto inviata`;
+            } else {
+                const givenAnswer = log.answer ? log.answer.toLowerCase().trim() : '';
+                const correctAnswer = cp.correctAnswer ? cp.correctAnswer.toLowerCase().trim() : '';
+                const isCorrect = givenAnswer === correctAnswer;
+                
+                iconHtml = isCorrect 
+                    ? '<i data-lucide="check-circle-2" class="w-6 h-6 text-green-600"></i>' 
+                    : '<i data-lucide="x-circle" class="w-6 h-6 text-red-500"></i>';
+                
+                detailHtml = `Data: <span class="font-mono text-gray-800">${log.answer}</span> <br><span class="text-xs text-gray-500">Esatta: ${cp.correctAnswer}</span>`;
+            }
+        }
+
         const div = document.createElement('div');
-        div.className = "p-4 border-b bg-white rounded-lg shadow-sm mb-3 border border-gray-100 flex justify-between items-center";
-        div.innerHTML = `<div><p class="font-bold">${time} - ${teamName}</p><p class="text-sm">Punto #${cpNumber}: ${log.answer || '(Foto)'}</p></div>`;
+        div.className = "p-3 border-b bg-white rounded-lg shadow-sm mb-3 border border-gray-100 flex items-center justify-between";
+        div.innerHTML = `
+            <div class="flex items-center gap-4">
+                <div class="flex-shrink-0 bg-gray-50 p-2 rounded-full border border-gray-200">${iconHtml}</div>
+                <div>
+                    <p class="font-bold text-gray-800">${time} - ${teamName}</p>
+                    <p class="text-sm text-gray-600">Punto #${cpNumber} | ${detailHtml}</p>
+                </div>
+            </div>
+        `;
         logContainer.appendChild(div);
     });
     
@@ -1330,45 +1379,20 @@ function renderLiveMap() {
     const staticContainer = document.getElementById('liveMapStaticMarkers');
     staticContainer.innerHTML = '';
     
-    const { checkpoints, submissions } = dashboardData;
-    
-    const cpVisits = {};
-    checkpoints.forEach(cp => cpVisits[cp.id] = 0);
-    
-    submissions.forEach(sub => {
-        if (sub.status !== 'rejected') {
-            const cp = checkpoints.find(c => c.id === sub.checkpointId);
-            if (cp) {
-                let isCorrect = false;
-                if (cp.cpType === 'selfie') isCorrect = true;
-                else if (sub.answer && cp.correctAnswer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) isCorrect = true;
-                
-                if (isCorrect) cpVisits[cp.id]++;
-            }
-        }
-    });
-
-    const maxVisits = Math.max(1, ...Object.values(cpVisits));
+    const { checkpoints } = dashboardData;
 
     checkpoints.forEach(cp => {
         if (!cp.mapX || !cp.mapY) return;
         
-        const visits = cpVisits[cp.id];
-        const intensity = visits / maxVisits;
-        const size = 18 + (intensity * 14); 
-        const opacity = 0.6 + (intensity * 0.4);
-        
         const marker = document.createElement('div');
-        marker.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow flex items-center justify-center font-bold text-white transition-all';
+        marker.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow flex items-center justify-center font-bold text-white bg-gray-800 opacity-80';
         marker.style.left = `${cp.mapX}%`;
         marker.style.top = `${cp.mapY}%`;
-        marker.style.width = `${size}px`;
-        marker.style.height = `${size}px`;
-        marker.style.backgroundColor = visits === 0 ? '#9ca3af' : `rgba(220, 38, 38, ${opacity})`;
-        marker.style.zIndex = visits === 0 ? '1' : '5';
-        marker.style.fontSize = `${size * 0.45}px`;
+        marker.style.width = '18px';
+        marker.style.height = '18px';
+        marker.style.zIndex = '1';
+        marker.style.fontSize = '11px';
         marker.textContent = cp.number;
-        marker.title = `Punto #${cp.number} - ${visits} transiti`;
         
         staticContainer.appendChild(marker);
     });
@@ -1410,13 +1434,7 @@ function renderMapPaths() {
             if (!cp.mapX || !cp.mapY) return;
             const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id && s.status !== 'rejected');
             if (sub) {
-                let isCorrect = false;
-                if (cp.cpType === 'selfie') isCorrect = true;
-                else if (sub.answer && cp.correctAnswer && sub.answer.toLowerCase().trim() === cp.correctAnswer.toLowerCase().trim()) isCorrect = true;
-
-                if (isCorrect) {
-                    validSubs.push({ cp, time: sub.timestamp?.toMillis() || 0 });
-                }
+                validSubs.push({ cp, time: sub.timestamp?.toMillis() || 0 });
             }
         });
 
@@ -1509,3 +1527,9 @@ document.addEventListener('webkitfullscreenchange', () => {
 });
 
 document.getElementById('loadMoreActivityBtn').addEventListener('click', () => initActivityLogView(true));
+
+document.getElementById('refreshActivityLogBtn').addEventListener('click', () => {
+    const icon = document.querySelector('#refreshActivityLogBtn i');
+    icon.classList.add('animate-spin');
+    initActivityLogView(false).then(() => icon.classList.remove('animate-spin'));
+});

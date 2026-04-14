@@ -244,22 +244,27 @@
             </div>
             
             <div class="mt-6 bg-blue-50 border-l-4 border-blue-500 p-4 md:p-6 rounded-lg shadow-md">
-                <h3 class="text-lg font-bold text-blue-800 flex items-center mb-2"><i data-lucide="zap" class="w-5 h-5 mr-2"></i>Ottimizzazione Database (Best Practices)</h3>
+                <h3 class="text-lg font-bold text-blue-800 flex items-center mb-2">Monitoraggio Consumi Database</h3>
                 <ul class="list-disc pl-5 text-sm text-blue-900 space-y-2">
-                    <li><strong>Rimani su questa Dashboard:</strong> La mappa e la classifica si aggiornano in automatico. Alternare Mappa e Dashboard consuma 0 letture.</li>
-                    <li><strong>Non premere mai F5:</strong> Ricaricare la pagina dal browser impone il download retroattivo di tutto lo storico di gara.</li>
-                    <li><strong>Usa "Log Attività" con parsimonia:</strong> L'apertura del Log ignora la cache locale e scarica ogni singola operazione passata. Usalo solo per audit necessari.</li>
-                    <li><strong>Sincronizza Dati:</strong> Sulla mappa, il sistema renderizza i tracciati automaticamente. Il tasto serve solo per forzare il reset visivo in caso di anomalia del dispositivo.</li>
+                    <li><strong>Persistenza del Listener:</strong> Una volta aperta la dashboard, le nuove risposte consumano 1 lettura ciascuna in tempo reale. Questo accade in background in ogni vista (Mappa, Classifica, Giudici).</li>
+                    <li><strong>Costo del Refresh (F5):</strong> Ricaricare la pagina è l'operazione più costosa. Obbliga il sistema a scaricare nuovamente tutte le migliaia di risposte già salvate. Evita il refresh manuale.</li>
+                    <li><strong>Navigazione Interna:</strong> Spostarsi tra le schede tramite i tasti della dashboard non genera nuove query e non aumenta i costi. I dati sono già presenti nella memoria del browser.</li>
+                    <li><strong>Log Attività:</strong> Questa vista non è in tempo reale. Ogni apertura o aggiornamento manuale genera una query da 20 letture.</li>
                 </ul>
             </div>
         </div>
         
         <div id="activityLogView" class="hidden">
              <div class="bg-white p-6 rounded-xl shadow-lg max-w-4xl mx-auto">
-                <button id="backToDashboardFromLog" class="mb-6 text-brand-green font-bold flex items-center hover:underline">
-                    <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Dashboard
-                </button>
-                <h2 class="text-2xl font-black mb-6 text-center text-gray-800">Log Attività in Tempo Reale</h2>
+                <div class="flex justify-between items-center mb-6">
+                    <button id="backToDashboardFromLog" class="text-brand-green font-bold flex items-center hover:underline">
+                        <i data-lucide="arrow-left" class="w-5 h-5 mr-2"></i> Torna alla Dashboard
+                    </button>
+                    <button id="refreshActivityLogBtn" title="Aggiorna Log" class="bg-blue-100 text-blue-700 p-2 rounded hover:bg-blue-200">
+                        <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <h2 class="text-2xl font-black mb-6 text-center text-gray-800">Log Attività Storico</h2>
                 <div id="activityLogContainer" class="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
                     </div>
                     <button id="loadMoreActivityBtn" class="w-full mt-4 p-3 bg-gray-100 text-gray-600 font-bold rounded-lg hover:bg-gray-200 hidden">
