@@ -219,14 +219,14 @@ async function setupDashboardListener() {
                 const mapView = document.getElementById('organizerMapView');
                 if (mapView && !mapView.classList.contains('hidden')) {
                     if (mapRenderTimeout) clearTimeout(mapRenderTimeout);
-                    mapRenderTimeout = setTimeout(() => {
-                        const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
-                        initMapTeamSelector();
-                        document.querySelectorAll('.map-team-cb').forEach(cb => {
-                            if (checkedTeams.includes(cb.value)) cb.checked = true;
-                        });
-                        renderLiveMap();
-                    }, 1500);
+                        mapRenderTimeout = setTimeout(() => {
+                            const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
+                            initMapTeamSelector(true);
+                            document.querySelectorAll('.map-team-cb').forEach(cb => {
+                                cb.checked = checkedTeams.includes(cb.value);
+                            });
+                            renderLiveMap();
+                        }, 1500);
                 }
 
                 if (currentJudgeTeamId) {
@@ -340,38 +340,35 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
 
     teamStats.sort((a, b) => b.score - a.score);
 
-    // 4. RENDERING SCAGLIONATO (TIME SLICING) - Risolve Criticità 3
+    // 4. RENDERING CLASSIFICA (DOM Recycling)
     if (leaderboardAnimationFrame) cancelAnimationFrame(leaderboardAnimationFrame);
+    leaderboardAnimationFrame = null;
+
     const leaderboardBody = document.getElementById('leaderboardBody');
-    leaderboardBody.innerHTML = ''; // Reset iniziale
-    
-    let currentIndex = 0;
-    const chunkSize = 50; // Renderizziamo 50 squadre alla volta
+    const existingRows = leaderboardBody.children;
 
-    function renderNextChunk() {
-        const chunk = teamStats.slice(currentIndex, currentIndex + chunkSize);
+    teamStats.forEach((team, i) => {
+        const badge = team.category === 'non-competitive' 
+            ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
+            : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
         
-        const html = chunk.map((team, i) => {
-            const globalIndex = currentIndex + i;
-            const badge = team.category === 'non-competitive' 
-                ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
-                : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
-            return `<tr class="border-b ${globalIndex === 0 ? 'bg-yellow-100' : ''}"><td class="p-2 text-center font-bold">${globalIndex + 1}</td><td class="p-2"><div class="font-bold">${team.name}${badge}</div><div class="text-xs text-gray-500">${team.email || ''}</div></td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td></tr>`;
-        }).join('');
-        
-        leaderboardBody.insertAdjacentHTML('beforeend', html);
-        currentIndex += chunkSize;
+        const rowClass = `border-b ${i === 0 ? 'bg-yellow-100' : ''}`;
+        const cellContent = `<td class="p-2 text-center font-bold">${i + 1}</td><td class="p-2"><div class="font-bold">${team.name}${badge}</div><div class="text-xs text-gray-500">${team.email || ''}</div></td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td>`;
 
-        // Se ci sono ancora squadre, delega al prossimo frame disponibile
-        if (currentIndex < teamStats.length) {
-            leaderboardAnimationFrame = requestAnimationFrame(renderNextChunk);
+        if (existingRows[i]) {
+            if (existingRows[i].className !== rowClass) existingRows[i].className = rowClass;
+            if (existingRows[i].innerHTML !== cellContent) existingRows[i].innerHTML = cellContent;
         } else {
-            lucide.createIcons({ root: leaderboardBody });
-            leaderboardAnimationFrame = null;
+            const tr = document.createElement('tr');
+            tr.className = rowClass;
+            tr.innerHTML = cellContent;
+            leaderboardBody.appendChild(tr);
         }
-    }
+    });
 
-    renderNextChunk();
+    while (existingRows.length > teamStats.length) {
+        leaderboardBody.removeChild(leaderboardBody.lastChild);
+    }
 }
 
 // Export CSV
@@ -412,7 +409,7 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
                     
                     if (isCorrect) {
                         score += cp.points;
-                        const subTime = sub.timestamp?.toMillis() || 0;
+                        const subTime = sub.timestamp ? (typeof sub.timestamp.toMillis === 'function' ? sub.timestamp.toMillis() : sub.timestamp.toDate().getTime()) : 0;
                         if (subTime > lastCorrectTime) lastCorrectTime = subTime;
                     }
                 }
@@ -735,8 +732,13 @@ function renderJudgeList() {
     const { teams, checkpoints, submissions } = dashboardData;
     const tbody = document.getElementById('judgeListBody');
 
+    const subsMap = {};
+    submissions.forEach(s => {
+        subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+    });
+
     const stats = teams.map(t => {
-        const calc = calculateScore(t.id, checkpoints, submissions);
+        const calc = calculateScore(t.id, checkpoints, submissions, subsMap);
         const subsCount = submissions.filter(s => s.teamId === t.id && s.status !== 'rejected').length;
         return { ...t, ...calc, subsCount };
     }).sort((a,b) => b.score - a.score);
@@ -788,8 +790,8 @@ function renderJudgeDetail(team, checkpoints, teamSubs) {
         displayCheckpoints.sort((a, b) => {
             const subA = teamSubs.find(s => s.checkpointId === a.id);
             const subB = teamSubs.find(s => s.checkpointId === b.id);
-            const timeA = subA && subA.timestamp ? subA.timestamp.toMillis() : 0;
-            const timeB = subB && subB.timestamp ? subB.timestamp.toMillis() : 0;
+            const timeA = subA && subA.timestamp ? (typeof subA.timestamp.toMillis === 'function' ? subA.timestamp.toMillis() : subA.timestamp.toDate().getTime()) : 0;
+            const timeB = subB && subB.timestamp ? (typeof subB.timestamp.toMillis === 'function' ? subB.timestamp.toMillis() : subB.timestamp.toDate().getTime()) : 0;
             return sortOrder === 'timeDesc' ? timeB - timeA : timeA - timeB;
         });
     } else {
@@ -1612,14 +1614,20 @@ document.getElementById('liveMapBtn').addEventListener('click', async () => {
     renderLiveMap();
 });
 
-function initMapTeamSelector() {
+function initMapTeamSelector(preserveSelection = false) {
     const selector = document.getElementById('mapTeamSelector');
     selector.innerHTML = '';
     if (!dashboardData) return;
 
     const { teams, checkpoints, submissions } = dashboardData;
+
+    const subsMap = {};
+    submissions.forEach(s => {
+        subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+    });
+
     const teamStats = teams.map(team => {
-        const stats = calculateScore(team.id, checkpoints, submissions);
+        const stats = calculateScore(team.id, checkpoints, submissions, subsMap);
         return { ...team, score: stats.score };
     }).sort((a,b) => b.score - a.score);
 
@@ -1630,7 +1638,7 @@ function initMapTeamSelector() {
         const div = document.createElement('div');
         div.className = "flex items-center p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 transition-colors cursor-pointer bg-white shadow-sm";
         div.innerHTML = `
-            <input type="checkbox" id="map-team-${t.id}" value="${t.id}" data-color="${color}" class="map-team-cb w-4 h-4 mr-3 cursor-pointer text-teal-600 focus:ring-teal-500 rounded" ${i < 3 ? 'checked' : ''}>
+            <input type="checkbox" id="map-team-${t.id}" value="${t.id}" data-color="${color}" class="map-team-cb w-4 h-4 mr-3 cursor-pointer text-teal-600 focus:ring-teal-500 rounded" ${(!preserveSelection && i < 3) ? 'checked' : ''}>
             <label for="map-team-${t.id}" class="flex-grow cursor-pointer font-bold text-sm text-gray-700 truncate" title="${t.name}">#${i+1} ${t.name} <br><span class="text-xs text-gray-500 font-normal">${t.score} pt</span></label>
             <div class="w-4 h-4 rounded-full border shadow-sm" style="background-color: ${color}"></div>
         `;
@@ -1703,7 +1711,8 @@ function renderMapPaths() {
             if (!cp.mapX || !cp.mapY) return;
             const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id && s.status !== 'rejected');
             if (sub) {
-                validSubs.push({ cp, time: sub.timestamp?.toMillis() || 0 });
+                const subTime = sub.timestamp ? (typeof sub.timestamp.toMillis === 'function' ? sub.timestamp.toMillis() : sub.timestamp.toDate().getTime()) : 0;
+                validSubs.push({ cp, time: subTime });
             }
         });
 
@@ -1746,13 +1755,10 @@ document.getElementById('syncMapBtn').addEventListener('click', () => {
     
     if (dashboardData) {
         const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
-        
-        initMapTeamSelector();
-        
+        initMapTeamSelector(true);
         document.querySelectorAll('.map-team-cb').forEach(cb => {
-            if (checkedTeams.includes(cb.value)) cb.checked = true;
+            cb.checked = checkedTeams.includes(cb.value);
         });
-        
         renderLiveMap();
     }
     setTimeout(() => icon.classList.remove('animate-spin'), 500);
