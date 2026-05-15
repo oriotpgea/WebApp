@@ -35,6 +35,7 @@ let currentEventId = null;
 let currentUserRole = null;
 let currentUserId = null;
 let participantListenerUnsub = null;
+let participantSubsUnsub = null;
 let activityLogUnsub = null;
 let unsubscribeDashboard = null;
 let unsubscribeTeams = null;
@@ -54,6 +55,7 @@ let isFirstActivityLoad = true;
 
 onAuthStateChanged(auth, async user => {
     if (participantListenerUnsub) { participantListenerUnsub(); participantListenerUnsub = null; }
+    if (participantSubsUnsub) { participantSubsUnsub(); participantSubsUnsub = null; }
     if (activityLogUnsub) { activityLogUnsub(); activityLogUnsub = null; }
     if (judgeListUnsub) { judgeListUnsub(); judgeListUnsub = null; }
 
@@ -1483,6 +1485,7 @@ function initParticipantLobbyView() {
 }
 async function initParticipantView(teamId, isReadOnly=false) {
     if (participantListenerUnsub) participantListenerUnsub();
+    if (participantSubsUnsub) participantSubsUnsub();
     
     participantListenerUnsub = onSnapshot(doc(db, "events", currentEventId), (docSnap) => {
         if (docSnap.exists()) {
@@ -1521,7 +1524,8 @@ async function initParticipantView(teamId, isReadOnly=false) {
         lucide.createIcons({ root: grid });
         showView('participantView');
 
-        onSnapshot(subQ, (snap) => {
+        participantSubsUnsub = onSnapshot(subQ, (snap) => {
+            console.log("Esecuzione listener sottomissioni"); // Inserisci questa riga per il test
             currentSubs = {};
             snap.forEach(d => currentSubs[d.data().checkpointId] = {id:d.id, ...d.data()});
 
