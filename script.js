@@ -169,10 +169,12 @@ async function setupDashboardListener() {
         const eventRef = doc(db, "events", currentEventId);
         const eventDoc = await getDoc(eventRef);
         
+        // script.js - All'interno di setupDashboardListener()
         if (eventDoc.exists()) {
-             const eventData = eventDoc.data();
-             
-             dashboardData = {
+            const eventData = eventDoc.data();
+            
+            dashboardData = {
+                eventName: eventData.name, // Inserire qui
                 checkpoints: [],
                 teams: [],
                 submissions: []
@@ -190,6 +192,7 @@ async function setupDashboardListener() {
                 dashboardData.teams = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 const dashboardView = document.getElementById('organizerDashboardView');
                 if (dashboardData.checkpoints.length > 0 && !dashboardView.classList.contains('hidden')) {
+                    renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
                     updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
                 }
             });
@@ -369,18 +372,25 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
     renderNextChunk();
 }
 
-// Export CSV aggiornato
+// Export CSV
 document.getElementById('exportCsvBtn').addEventListener('click', () => {
     if (!dashboardData || !dashboardData.teams.length) return;
     const teams = dashboardData.teams;
     const { checkpoints, submissions } = dashboardData;
 
+    // 1. HASH MAP O(1)
+    const subsMap = {};
+    submissions.forEach(s => {
+        subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+    });
+
+    // 2. CALCOLO DATI
     const teamStats = teams.map(team => {
         let score = 0;
         let lastCorrectTime = 0;
         const teamSubs = [];
         checkpoints.forEach(cp => {
-            const sub = submissions.find(s => s.teamId === team.id && s.checkpointId === cp.id);
+            const sub = subsMap[`${team.id}_${cp.id}`];
             let cellText = "-";
 
             if (sub) {
@@ -411,35 +421,290 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
         return { name: team.name, category: team.category, score, lastCorrectTime, subs: teamSubs };
     });
 
-    teamStats.sort((a, b) => {
+    // 3. SEPARAZIONE ARRAY
+    const competitive = teamStats.filter(t => t.category !== 'non-competitive');
+    const nonCompetitive = teamStats.filter(t => t.category === 'non-competitive');
+
+    // 4. ORDINAMENTO CONDIZIONALE
+    competitive.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (a.lastCorrectTime === 0) return 1;
         if (b.lastCorrectTime === 0) return -1;
         return a.lastCorrectTime - b.lastCorrectTime;
     });
 
-    let csvContent = "Squadra;Categoria;" + checkpoints.map(cp => `"#${cp.number} (${cp.cpType})"`).join(";") + ';"ULTIMO ORARIO ESATTO";"TOTALE"\n';
-    
+    // 5. DOPPIO DOWNLOAD CSV
     const correctAnswersRow = checkpoints.map(cp => {
         if (cp.cpType === 'selfie') return '"(Foto)"';
         return `"${(cp.correctAnswer || "").replace(/"/g, '""')}"`;
     });
-    csvContent += `"RISPOSTE ESATTE";"-";${correctAnswersRow.join(";")};"-";"-"\n`;
-    
-    teamStats.forEach(t => {
-        const catLabel = t.category === 'non-competitive' ? 'Ludico' : 'Competitiva';
+
+    // CSV COMPETITIVA
+    let csvCompetitive = "Squadra;Categoria;" + checkpoints.map(cp => `"#${cp.number} (${cp.cpType})"`).join(";") + ';"ULTIMO ORARIO ESATTO";"TOTALE"\n';
+    csvCompetitive += `"RISPOSTE ESATTE";"-";${correctAnswersRow.join(";")};"-";"-"\n`;
+    competitive.forEach(t => {
         const safeName = t.name.replace(/"/g, '""');
         const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : "-";
-        csvContent += `"${safeName}";"${catLabel}";${t.subs.join(";")};"${formattedTime}";"${t.score}"\n`;
+        csvCompetitive += `"${safeName}";"Competitiva";${t.subs.join(";")};"${formattedTime}";"${t.score}"\n`;
     });
 
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "classifica.csv";
-    document.body.appendChild(link); 
-    link.click(); 
-    document.body.removeChild(link);
+    const blobCompetitive = new Blob(["\uFEFF" + csvCompetitive], { type: 'text/csv;charset=utf-8;' });
+    setTimeout(() => {
+        const linkCompetitive = document.createElement("a");
+        linkCompetitive.href = URL.createObjectURL(blobCompetitive);
+        linkCompetitive.download = "classifica_competitiva.csv";
+        document.body.appendChild(linkCompetitive);
+        linkCompetitive.click();
+        document.body.removeChild(linkCompetitive);
+    }, 0);
+
+    // CSV LUDICA
+    let csvLudica = "Squadra;Categoria;" + checkpoints.map(cp => `"#${cp.number} (${cp.cpType})"`).join(";") + ';"ULTIMO ORARIO ESATTO";"TOTALE"\n';
+    csvLudica += `"RISPOSTE ESATTE";"-";${correctAnswersRow.join(";")};"-";"-"\n`;
+    nonCompetitive.forEach(t => {
+        const safeName = t.name.replace(/"/g, '""');
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : "-";
+        csvLudica += `"${safeName}";"Ludica";${t.subs.join(";")};"${formattedTime}";"${t.score}"\n`;
+    });
+
+    const blobLudica = new Blob(["\uFEFF" + csvLudica], { type: 'text/csv;charset=utf-8;' });
+    setTimeout(() => {
+        const linkLudica = document.createElement("a");
+        linkLudica.href = URL.createObjectURL(blobLudica);
+        linkLudica.download = "risultati_ludica.csv";
+        document.body.appendChild(linkLudica);
+        linkLudica.click();
+        document.body.removeChild(linkLudica);
+    }, 500);
+
+    // 6. EXPORT HTML
+    const eventName = dashboardData.eventName || "Orienteering Challenge";
+    const exportDate = new Date().toLocaleDateString('it-IT', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+
+    let htmlContent = `<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Risultati ${eventName}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --font-body: 'Roboto', sans-serif;
+            --font-heading: 'Montserrat', sans-serif;
+            --brand-green: #FF0099;
+            --brand-orange: #2E7D32;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-body);
+            background: #f9fafb;
+            color: #1f2937;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            background: white;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            border-left: 4px solid var(--brand-green);
+        }
+        h1 {
+            font-family: var(--font-heading);
+            font-weight: 900;
+            color: var(--brand-green);
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #6b7280;
+            font-size: 0.95rem;
+        }
+        h2 {
+            font-family: var(--font-heading);
+            font-weight: 700;
+            font-size: 1.5rem;
+            margin: 2rem 0 1rem 0;
+            color: #111827;
+        }
+        .section {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        thead {
+            background: #f3f4f6;
+        }
+        th {
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 700;
+            color: #374151;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        th.center { text-align: center; }
+        th.right { text-align: right; }
+        td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        td.center { text-align: center; }
+        td.right { text-align: right; }
+        tr:hover {
+            background: #f9fafb;
+        }
+        .podium-1 {
+            background: #fef3c7 !important;
+            font-weight: 700;
+        }
+        .podium-2 {
+            background: #f3f4f6 !important;
+            font-weight: 600;
+        }
+        .podium-3 {
+            background: #fef3e7 !important;
+            font-weight: 600;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+        .badge-competitive {
+            background: #ffedd5;
+            color: var(--brand-orange);
+            border: 1px solid #fed7aa;
+        }
+        .badge-ludica {
+            background: #e5e7eb;
+            color: #4b5563;
+            border: 1px solid #d1d5db;
+        }
+        .position {
+            font-weight: 700;
+            color: #6b7280;
+            font-size: 1.1rem;
+        }
+        .score {
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        @media print {
+            body { background: white; padding: 0; }
+            .section { box-shadow: none; page-break-inside: avoid; }
+            @page { margin: 1.5cm; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>${eventName}</h1>
+            <p class="subtitle">Risultati finali — Esportato il ${exportDate}</p>
+        </header>
+
+        <div class="section">
+            <h2>🏆 Classifica Competitiva</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 60px;" class="center">Pos.</th>
+                        <th>Squadra</th>
+                        <th class="center">Categoria</th>
+                        <th class="center">Ultimo Orario</th>
+                        <th class="right" style="width: 100px;">Punteggio</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+    competitive.forEach((t, i) => {
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : "-";
+        let rowClass = '';
+        if (i === 0) rowClass = 'podium-1';
+        else if (i === 1) rowClass = 'podium-2';
+        else if (i === 2) rowClass = 'podium-3';
+        
+        htmlContent += `
+                    <tr class="${rowClass}">
+                        <td class="center position">${i + 1}</td>
+                        <td>${t.name}</td>
+                        <td class="center"><span class="badge badge-competitive">Competitiva</span></td>
+                        <td class="center">${formattedTime}</td>
+                        <td class="right score">${t.score}</td>
+                    </tr>`;
+    });
+
+    htmlContent += `
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>🎮 Risultati Ludica</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Squadra</th>
+                        <th class="center">Categoria</th>
+                        <th class="center">Ultimo Orario</th>
+                        <th class="right" style="width: 100px;">Punteggio</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+    nonCompetitive.forEach(t => {
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : "-";
+        htmlContent += `
+                    <tr>
+                        <td>${t.name}</td>
+                        <td class="center"><span class="badge badge-ludica">Ludica</span></td>
+                        <td class="center">${formattedTime}</td>
+                        <td class="right score">${t.score}</td>
+                    </tr>`;
+    });
+
+    htmlContent += `
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    const blobHtml = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    setTimeout(() => {
+        const linkHtml = document.createElement("a");
+        linkHtml.href = URL.createObjectURL(blobHtml);
+        linkHtml.download = "risultati_completi.html";
+        document.body.appendChild(linkHtml);
+        linkHtml.click();
+        document.body.removeChild(linkHtml);
+    }, 1000);
 });
 
 document.getElementById('backToOrganizerHome').addEventListener('click', () => { 
