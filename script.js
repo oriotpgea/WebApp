@@ -1687,6 +1687,12 @@ function renderMapPaths() {
 
     const { checkpoints, submissions } = dashboardData;
 
+    // AGGIUNGERE HASHMAP - QUESTO È IL FIX
+    const subsMap = {};
+    submissions.forEach(s => {
+        subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+    });
+
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg");
     svg.style.position = "absolute";
@@ -1709,10 +1715,10 @@ function renderMapPaths() {
         const validSubs = [];
         checkpoints.forEach(cp => {
             if (!cp.mapX || !cp.mapY) return;
-            const sub = submissions.find(s => s.teamId === teamId && s.checkpointId === cp.id && s.status !== 'rejected');
-            if (sub) {
-                const subTime = sub.timestamp ? (typeof sub.timestamp.toMillis === 'function' ? sub.timestamp.toMillis() : sub.timestamp.toDate().getTime()) : 0;
-                validSubs.push({ cp, time: subTime });
+            // USARE HASHMAP INVECE DI .find() - QUESTO È IL FIX
+            const sub = subsMap[`${teamId}_${cp.id}`];
+            if (sub && sub.status !== 'rejected') {
+                validSubs.push({ cp, time: sub.timestamp?.toMillis() || 0 });
             }
         });
 
