@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch, limit, startAfter } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch, limit, startAfter} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -19,7 +19,7 @@ const db = initializeFirestore(app, {
 const storage = getStorage(app);
 
 // Array viste aggiornato con le nuove schermate Giudici
-const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'activityLogView', 'organizerJudgeListView', 'organizerJudgeDetailView', 'organizerMapView'];
+const views = ['loadingView', 'loginView', 'organizerHomeView', 'joinEventView', 'participantLobbyView', 'participantView', 'checkpointView', 'organizerDashboardView', 'organizerDetailView', 'organizerAdminView', 'organizerTeamsView', 'activityLogView', 'organizerJudgeListView', 'organizerJudgeDetailView', 'organizerMapView', 'participantHomeView'];
 
 function showView(viewId) {
     views.forEach(id => {
@@ -69,25 +69,12 @@ onAuthStateChanged(auth, async user => {
             } else {
                 currentUserRole = 'participant';
                 const userData = userDoc.exists() ? userDoc.data() : {};
-                const savedEventId = userData.currentEventId || localStorage.getItem('currentEventId-' + user.uid);
-                if (savedEventId) {
-                    const eventDoc = await getDoc(doc(db, "events", savedEventId));
-                    if (eventDoc.exists()) {
-                        currentEventId = savedEventId;
-                        const eventStatus = eventDoc.data().status;
-                        if (eventStatus === 'active') {
-                            initParticipantView(currentUserId);
-                        } else if (eventStatus === 'pending') {
-                            initParticipantLobbyView();
-                        } else { // 'finished'
-                            initParticipantView(currentUserId, true);
-                        }
-                    } else {
-                        localStorage.removeItem('currentEventId-' + user.uid);
-                        showView('joinEventView');
-                    }
-                } else {
+                const eventIds = Object.keys(userData.events || {});
+
+                if (eventIds.length === 0) {
                     showView('joinEventView');
+                } else {
+                    initParticipantHomeView(eventIds);
                 }
             }
         } catch (error) {
@@ -141,13 +128,49 @@ function initOrganizerHomeView(user) {
             const event = doc.data();
             const eventCard = document.createElement('div');
             eventCard.className = 'p-4 bg-white rounded-lg shadow-md flex justify-between items-center';
-            eventCard.innerHTML = `<div><h3 class="font-bold text-xl text-green-800">${event.name}</h3><p class="text-sm text-gray-500">Codice: <span class="font-mono font-bold">${event.joinCode}</span></p></div><div class="flex space-x-2"><button class="manage-event-btn btn btn-primary px-4 py-2">Gestisci</button></div>`;
+            eventCard.innerHTML = `<div><h3 class="font-bold text-xl text-green-800">${event.name}</h3><p class="text-sm text-gray-500">Codice: <span class="font-mono font-bold">${event.joinCode}</span></p></div><div class="flex space-x-2"><button class="duplicate-event-btn btn btn-secondary px-4 py-2 text-sm">Duplica</button><button class="manage-event-btn btn btn-primary px-4 py-2">Gestisci</button></div>`;
             eventCard.querySelector('.manage-event-btn').onclick = () => { currentEventId = doc.id; initOrganizerDashboardView(); };
+            eventCard.querySelector('.duplicate-event-btn').onclick = () => duplicateEvent(doc.id, event);
             eventsList.appendChild(eventCard);
         });
         lucide.createIcons();
     }, (error) => console.error(error));
     showView('organizerHomeView');
+}
+
+async function duplicateEvent(eventId, eventData) {
+    showModal("Duplica Evento", `Sei sicuro di voler duplicare l'evento "${eventData.name}"? Verranno copiati solo i punti di controllo.`, true, async () => {
+        try {
+            const cpSnap = await getDocs(collection(db, `events/${eventId}/checkpoints`));
+            const joinCode = `GARA-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+            
+            const newEventData = {
+                name: `${eventData.name} (copia)`,
+                joinCode: joinCode,
+                organizerId: eventData.organizerId,
+                status: 'pending',
+                creation_time: new Date()
+            };
+            if (eventData.mapUrl) newEventData.mapUrl = eventData.mapUrl;
+
+            const newEventRef = await addDoc(collection(db, "events"), newEventData);
+            const newEventId = newEventRef.id;
+
+            if (!cpSnap.empty) {
+                const batch = writeBatch(db);
+                cpSnap.forEach(cpDoc => {
+                    const cpData = cpDoc.data();
+                    const newCpRef = doc(collection(db, `events/${newEventId}/checkpoints`));
+                    batch.set(newCpRef, cpData);
+                });
+                await batch.commit();
+            }
+
+            showModal("Successo", "Evento duplicato con successo!");
+        } catch (error) {
+            showModal("Errore", "Impossibile duplicare l'evento: " + error.message);
+        }
+    });
 }
 
 document.getElementById('createEventForm').addEventListener('submit', async (e) => {
@@ -208,14 +231,15 @@ async function setupDashboardListener() {
                 }
             });
             
-            const subQ = query(collection(db, "submissions"), where("eventId", "==", currentEventId));
-            unsubscribeDashboard = onSnapshot(subQ, (subSnap) => {
-                dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            dashboardData.teamStats = {};
+            const statsQ = collection(db, `events/${currentEventId}/teamStats`);
+            unsubscribeDashboard = onSnapshot(statsQ, (snap) => {
+                snap.forEach(doc => { dashboardData.teamStats[doc.id] = doc.data(); });
                 const dashboardView = document.getElementById('organizerDashboardView');
                 if (!dashboardView.classList.contains('hidden')) {
-                    updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+                    renderLeaderboardFromStats(dashboardData.teams, dashboardData.teamStats, dashboardData.checkpoints.length);
                 }
-
+                
                 const mapView = document.getElementById('organizerMapView');
                 if (mapView && !mapView.classList.contains('hidden')) {
                     if (mapRenderTimeout) clearTimeout(mapRenderTimeout);
@@ -228,14 +252,13 @@ async function setupDashboardListener() {
                             renderLiveMap();
                         }, 1500);
                 }
-
-                if (currentJudgeTeamId) {
-                    const t = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
-                    const s = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
-                    const isJudgeDetailVisible = !document.getElementById('organizerJudgeDetailView').classList.contains('hidden');
-                    if (t && isJudgeDetailVisible) renderJudgeDetail(t, dashboardData.checkpoints, s);
-                }
             });
+
+            const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
+            dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (!document.getElementById('organizerDashboardView').classList.contains('hidden')) {
+                updateGridDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+            }
         }
     } catch (error) { showModal("Errore Dashboard", error.message); }
 }
@@ -299,13 +322,18 @@ function updateDashboardDOM(teams, checkpoints, submissions) {
 }
 
 function executeDashboardDOM(teams, checkpoints, submissions) {
-    // 1. CREAZIONE DIZIONARIO (HASH MAP) - Risolve Criticità 2
+    updateGridDOM(teams, checkpoints, submissions);
+    if (dashboardData.teamStats) {
+        renderLeaderboardFromStats(teams, dashboardData.teamStats, checkpoints.length);
+    }
+}
+
+function updateGridDOM(teams, checkpoints, submissions) {
     const subsMap = {};
     submissions.forEach(s => {
         subsMap[`${s.teamId}_${s.checkpointId}`] = s;
     });
 
-    // 2. AGGIORNAMENTO CELLE (Veloce grazie al dizionario)
     let gridChanged = false;
     teams.forEach(team => {
         checkpoints.forEach(cp => {
@@ -331,29 +359,29 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
         });
     });
     if (gridChanged) lucide.createIcons({ root: document.getElementById('organizerGrid') });
+}
 
-    // 3. CALCOLO CLASSIFICA
-    const teamStats = teams.map(team => {
-        const stats = calculateScore(team.id, checkpoints, submissions, subsMap);
-        return { ...team, ...stats };
+function renderLeaderboardFromStats(teams, teamStats, totalCheckpoints) {
+    const teamStatsArray = teams.map(team => {
+        const stats = teamStats[team.id] || { score: 0, completed: 0 };
+        return { ...team, score: stats.score || 0, completed: stats.completed || 0 };
     });
 
-    teamStats.sort((a, b) => b.score - a.score);
+    teamStatsArray.sort((a, b) => b.score - a.score);
 
-    // 4. RENDERING CLASSIFICA (DOM Recycling)
     if (leaderboardAnimationFrame) cancelAnimationFrame(leaderboardAnimationFrame);
     leaderboardAnimationFrame = null;
 
     const leaderboardBody = document.getElementById('leaderboardBody');
     const existingRows = leaderboardBody.children;
 
-    teamStats.forEach((team, i) => {
+    teamStatsArray.forEach((team, i) => {
         const badge = team.category === 'non-competitive' 
             ? '<span class="ml-2 text-xs bg-gray-200 text-gray-600 px-1 rounded">Ludica</span>' 
             : '<span class="ml-2 text-xs bg-orange-100 text-brand-orange px-1 rounded border border-orange-200">Competitiva</span>';
         
         const rowClass = `border-b ${i === 0 ? 'bg-yellow-100' : ''}`;
-        const cellContent = `<td class="p-2 text-center font-bold">${i + 1}</td><td class="p-2"><div class="font-bold">${team.name}${badge}</div><div class="text-xs text-gray-500">${team.email || ''}</div></td><td class="p-2 text-center">${team.completed}/${checkpoints.length}</td><td class="p-2 text-right font-bold">${team.score}</td>`;
+        const cellContent = `<td class="p-2 text-center font-bold">${i + 1}</td><td class="p-2"><div class="font-bold">${team.name}${badge}</div><div class="text-xs text-gray-500">${team.email || ''}</div></td><td class="p-2 text-center">${team.completed}/${totalCheckpoints}</td><td class="p-2 text-right font-bold">${team.score}</td>`;
 
         if (existingRows[i]) {
             if (existingRows[i].className !== rowClass) existingRows[i].className = rowClass;
@@ -366,7 +394,7 @@ function executeDashboardDOM(teams, checkpoints, submissions) {
         }
     });
 
-    while (existingRows.length > teamStats.length) {
+    while (existingRows.length > teamStatsArray.length) {
         leaderboardBody.removeChild(leaderboardBody.lastChild);
     }
 }
@@ -417,7 +445,7 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
             cellText = cellText.replace(/"/g, '""');
             teamSubs.push(`"${cellText}"`);
         });
-        return { name: team.name, category: team.category, score, lastCorrectTime, subs: teamSubs };
+        return { id: team.id, name: team.name, category: team.category, score, lastCorrectTime, subs: teamSubs };
     });
 
     // 3. SEPARAZIONE ARRAY
@@ -492,132 +520,33 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Risultati ${eventName}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --font-body: 'Roboto', sans-serif;
-            --font-heading: 'Montserrat', sans-serif;
-            --brand-green: #FF0099;
-            --brand-orange: #2E7D32;
-        }
+        :root { --font-body: 'Roboto', sans-serif; --font-heading: 'Montserrat', sans-serif; --brand-green: #FF0099; --brand-orange: #2E7D32; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: var(--font-body);
-            background: #f9fafb;
-            color: #1f2937;
-            padding: 2rem;
-            line-height: 1.6;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        header {
-            background: white;
-            padding: 2rem;
-            border-radius: 0.75rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-            border-left: 4px solid var(--brand-green);
-        }
-        h1 {
-            font-family: var(--font-heading);
-            font-weight: 900;
-            color: var(--brand-green);
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
-        }
-        .subtitle {
-            color: #6b7280;
-            font-size: 0.95rem;
-        }
-        h2 {
-            font-family: var(--font-heading);
-            font-weight: 700;
-            font-size: 1.5rem;
-            margin: 2rem 0 1rem 0;
-            color: #111827;
-        }
-        .section {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 0.75rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-        thead {
-            background: #f3f4f6;
-        }
-        th {
-            padding: 0.75rem;
-            text-align: left;
-            font-weight: 700;
-            color: #374151;
-            border-bottom: 2px solid #e5e7eb;
-        }
+        body { font-family: var(--font-body); background: #f9fafb; color: #1f2937; padding: 2rem; line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { background: white; padding: 2rem; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; border-left: 4px solid var(--brand-green); }
+        h1 { font-family: var(--font-heading); font-weight: 900; color: var(--brand-green); font-size: 2rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #6b7280; font-size: 0.95rem; }
+        h2 { font-family: var(--font-heading); font-weight: 700; font-size: 1.5rem; margin: 2rem 0 1rem 0; color: #111827; }
+        .section { background: white; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        thead { background: #f3f4f6; }
+        th { padding: 0.75rem; text-align: left; font-weight: 700; color: #374151; border-bottom: 2px solid #e5e7eb; }
         th.center { text-align: center; }
         th.right { text-align: right; }
-        td {
-            padding: 0.75rem;
-            border-bottom: 1px solid #f3f4f6;
-        }
+        td { padding: 0.75rem; border-bottom: 1px solid #f3f4f6; }
         td.center { text-align: center; }
         td.right { text-align: right; }
-        tr:hover {
-            background: #f9fafb;
-        }
-        .podium-1 {
-            background: #fef3c7 !important;
-            font-weight: 700;
-        }
-        .podium-2 {
-            background: #f3f4f6 !important;
-            font-weight: 600;
-        }
-        .podium-3 {
-            background: #fef3e7 !important;
-            font-weight: 600;
-        }
-        .badge {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 0.375rem;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.025em;
-        }
-        .badge-competitive {
-            background: #ffedd5;
-            color: var(--brand-orange);
-            border: 1px solid #fed7aa;
-        }
-        .badge-ludica {
-            background: #e5e7eb;
-            color: #4b5563;
-            border: 1px solid #d1d5db;
-        }
-        .position {
-            font-weight: 700;
-            color: #6b7280;
-            font-size: 1.1rem;
-        }
-        .score {
-            font-weight: 700;
-            font-size: 1.1rem;
-        }
-        @media print {
-            body { background: white; padding: 0; }
-            .section { box-shadow: none; page-break-inside: avoid; }
-            @page { margin: 1.5cm; }
-        }
+        tr:hover { background: #f9fafb; }
+        .podium-1 { background: #fef3c7 !important; font-weight: 700; }
+        .podium-2 { background: #f3f4f6 !important; font-weight: 600; }
+        .podium-3 { background: #fef3e7 !important; font-weight: 600; }
+        .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.025em; }
+        .badge-competitive { background: #ffedd5; color: var(--brand-orange); border: 1px solid #fed7aa; }
+        .badge-ludica { background: #e5e7eb; color: #4b5563; border: 1px solid #d1d5db; }
+        .position { font-weight: 700; color: #6b7280; font-size: 1.1rem; }
+        .score { font-weight: 700; font-size: 1.1rem; }
     </style>
 </head>
 <body>
@@ -632,7 +561,7 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 60px;" class="center">Pos.</th>
+                        <th class="center" style="width: 50px;">Pos</th>
                         <th>Squadra</th>
                         <th class="center">Categoria</th>
                         <th class="center">Ultimo Orario</th>
@@ -704,6 +633,210 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
         linkHtml.click();
         document.body.removeChild(linkHtml);
     }, 1000);
+
+    // 7. EXPORT HTML DETTAGLIATO COMPETITIVA
+    let htmlDetailCompetitive = `<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dettaglio Competitiva - ${eventName}</title>
+    <style>
+        :root { --font-body: 'Roboto', sans-serif; --font-heading: 'Montserrat', sans-serif; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: var(--font-body); background: #f9fafb; color: #1f2937; padding: 2rem; line-height: 1.6; }
+        .container { max-width: 100%; margin: 0 auto; overflow-x: auto; max-height: calc(100vh - 4rem); position: relative; }
+        header { background: white; padding: 2rem; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; border-left: 4px solid #FF0099; }
+        h1 { font-family: var(--font-heading); font-weight: 900; color: #FF0099; font-size: 2rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #6b7280; font-size: 0.95rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        th { padding: 0.5rem 0.35rem; text-align: center; font-weight: 700; color: #374151; background: #f3f4f6; border: 1px solid #e5e7eb; position: sticky; z-index: 10; }
+        th.team-col { text-align: left; min-width: 120px; position: sticky; left: 0; z-index: 20; background: #f3f4f6; }
+        th.time-col { min-width: 80px; }
+        thead tr:nth-child(1) th { top: 0; }
+        thead tr:nth-child(2) th { top: 2.5rem; }
+        thead tr:nth-child(3) th { top: 5rem; background: #fffbeb; }
+        td { padding: 0.4rem 0.35rem; border: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; }
+        td.team-col { text-align: left; font-weight: 600; position: sticky; left: 0; background: white; z-index: 5; }
+        .correct { background-color: #d1fae5; color: #065f46; font-weight: 600; }
+        .wrong { background-color: #fee2e2; color: #991b1b; font-weight: 600; }
+        .empty { background-color: white; color: #9ca3af; }
+        .question-row { background: #e0e7ff; font-size: 0.75rem; }
+        .question-row td, .question-row th { font-weight: 600; color: #3730a3; }
+        .answer-row { background: #fffbeb; border-top: 3px solid #fbbf24; border-bottom: 3px solid #fbbf24; }
+        .answer-row td, .answer-row th { font-weight: 700; color: #92400e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>${eventName} - Dettaglio Competitiva</h1>
+            <p class="subtitle">Esportato il ${exportDate}</p>
+        </header>
+        <table>
+            <thead>
+                <tr>
+                    <th class="team-col">Squadra</th>`;
+
+    checkpoints.forEach(cp => {
+        htmlDetailCompetitive += `<th title="${cp.cpType}">#${cp.number}</th>`;
+    });
+
+    htmlDetailCompetitive += `<th class="time-col">Ultimo Orario</th><th>Totale</th></tr><tr class="question-row"><th class="team-col">DOMANDA</th>`;
+
+    checkpoints.forEach(cp => {
+        const question = cp.question || '-';
+        htmlDetailCompetitive += `<th title="${question}">${question.length > 30 ? question.substring(0, 30) + '...' : question}</th>`;
+    });
+
+    htmlDetailCompetitive += `<th>-</th><th>-</th></tr><tr class="answer-row"><th class="team-col">RISPOSTA CORRETTA</th>`;
+
+    checkpoints.forEach(cp => {
+        const answer = cp.cpType === 'selfie' ? '(Foto)' : (cp.correctAnswer || '-');
+        htmlDetailCompetitive += `<th>${answer}</th>`;
+    });
+
+    htmlDetailCompetitive += `<th>-</th><th>-</th></tr></thead><tbody>`;
+
+    competitive.forEach((t, i) => {
+        htmlDetailCompetitive += `<tr><td class="team-col">${t.name}</td>`;
+        checkpoints.forEach(cp => {
+            let cellClass = 'empty';
+            let cellText = '-';
+            const submission = subsMap[`${t.id}_${cp.id}`];
+            if (submission && submission.status !== 'rejected') {
+                cellText = submission.answer || '(Foto)';
+                if (cp.cpType === 'selfie') {
+                    cellClass = 'correct';
+                } else {
+                    const isCorrect = submission.answer?.toLowerCase().trim() === cp.correctAnswer?.toLowerCase().trim();
+                    cellClass = isCorrect ? 'correct' : 'wrong';
+                }
+            }
+            htmlDetailCompetitive += `<td class="${cellClass}">${cellText}</td>`;
+        });
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : '-';
+        htmlDetailCompetitive += `<td>${formattedTime}</td><td style="font-weight: 700;">${t.score}</td></tr>`;
+    });
+
+    htmlDetailCompetitive += `
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>`;
+
+    const blobHtmlDetailCompetitive = new Blob([htmlDetailCompetitive], { type: 'text/html;charset=utf-8;' });
+    setTimeout(() => {
+        const linkHtmlDetailCompetitive = document.createElement("a");
+        linkHtmlDetailCompetitive.href = URL.createObjectURL(blobHtmlDetailCompetitive);
+        linkHtmlDetailCompetitive.download = "dettaglio_competitiva.html";
+        document.body.appendChild(linkHtmlDetailCompetitive);
+        linkHtmlDetailCompetitive.click();
+        document.body.removeChild(linkHtmlDetailCompetitive);
+    }, 1500);
+
+    // 8. EXPORT HTML DETTAGLIATO LUDICA
+    let htmlDetailLudica = `<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dettaglio Ludica - ${eventName}</title>
+    <style>
+        :root { --font-body: 'Roboto', sans-serif; --font-heading: 'Montserrat', sans-serif; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: var(--font-body); background: #f9fafb; color: #1f2937; padding: 2rem; line-height: 1.6; }
+        .container { max-width: 100%; margin: 0 auto; overflow-x: auto; max-height: calc(100vh - 4rem); position: relative; }
+        header { background: white; padding: 2rem; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; border-left: 4px solid #FF0099; }
+        h1 { font-family: var(--font-heading); font-weight: 900; color: #FF0099; font-size: 2rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #6b7280; font-size: 0.95rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        th { padding: 0.5rem 0.35rem; text-align: center; font-weight: 700; color: #374151; background: #f3f4f6; border: 1px solid #e5e7eb; position: sticky; z-index: 10; }
+        th.team-col { text-align: left; min-width: 120px; position: sticky; left: 0; z-index: 20; background: #f3f4f6; }
+        th.time-col { min-width: 80px; }
+        thead tr:nth-child(1) th { top: 0; }
+        thead tr:nth-child(2) th { top: 2.5rem; }
+        thead tr:nth-child(3) th { top: 5rem; background: #fffbeb; }
+        td { padding: 0.4rem 0.35rem; border: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; }
+        td.team-col { text-align: left; font-weight: 600; position: sticky; left: 0; background: white; z-index: 5; }
+        .correct { background-color: #d1fae5; color: #065f46; font-weight: 600; }
+        .wrong { background-color: #fee2e2; color: #991b1b; font-weight: 600; }
+        .empty { background-color: white; color: #9ca3af; }
+        .question-row { background: #e0e7ff; font-size: 0.75rem; }
+        .question-row td, .question-row th { font-weight: 600; color: #3730a3; }
+        .answer-row { background: #fffbeb; border-top: 3px solid #fbbf24; border-bottom: 3px solid #fbbf24; }
+        .answer-row td, .answer-row th { font-weight: 700; color: #92400e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>${eventName} - Dettaglio Ludica</h1>
+            <p class="subtitle">Esportato il ${exportDate}</p>
+        </header>
+        <table>
+            <thead>
+                <tr>
+                    <th class="team-col">Squadra</th>`;
+
+    checkpoints.forEach(cp => {
+        htmlDetailLudica += `<th title="${cp.cpType}">#${cp.number}</th>`;
+    });
+
+    htmlDetailLudica += `<th class="time-col">Ultimo Orario</th><th>Totale</th></tr><tr class="question-row"><th class="team-col">DOMANDA</th>`;
+
+    checkpoints.forEach(cp => {
+        const question = cp.question || '-';
+        htmlDetailLudica += `<th title="${question}">${question.length > 30 ? question.substring(0, 30) + '...' : question}</th>`;
+    });
+
+    htmlDetailLudica += `<th>-</th><th>-</th></tr><tr class="answer-row"><th class="team-col">RISPOSTA CORRETTA</th>`;
+
+    checkpoints.forEach(cp => {
+        const answer = cp.cpType === 'selfie' ? '(Foto)' : (cp.correctAnswer || '-');
+        htmlDetailLudica += `<th>${answer}</th>`;
+    });
+
+    htmlDetailLudica += `<th>-</th><th>-</th></tr></thead><tbody>`;
+
+    nonCompetitive.forEach((t, idx) => {
+        htmlDetailLudica += `<tr><td class="team-col">${t.name}</td>`;
+        checkpoints.forEach(cp => {
+            let cellClass = 'empty';
+            let cellText = '-';
+            const submission = subsMap[`${t.id}_${cp.id}`];
+            if (submission && submission.status !== 'rejected') {
+                cellText = submission.answer || '(Foto)';
+                if (cp.cpType === 'selfie') {
+                    cellClass = 'correct';
+                } else {
+                    const isCorrect = submission.answer?.toLowerCase().trim() === cp.correctAnswer?.toLowerCase().trim();
+                    cellClass = isCorrect ? 'correct' : 'wrong';
+                }
+            }
+            htmlDetailLudica += `<td class="${cellClass}">${cellText}</td>`;
+        });
+        const formattedTime = t.lastCorrectTime > 0 ? new Date(t.lastCorrectTime).toLocaleTimeString('it-IT') : '-';
+        htmlDetailLudica += `<td>${formattedTime}</td><td style="font-weight: 700;">${t.score}</td></tr>`;
+    });
+
+    htmlDetailLudica += `
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>`;
+
+    const blobHtmlDetailLudica = new Blob([htmlDetailLudica], { type: 'text/html;charset=utf-8;' });
+    setTimeout(() => {
+        const linkHtmlDetailLudica = document.createElement("a");
+        linkHtmlDetailLudica.href = URL.createObjectURL(blobHtmlDetailLudica);
+        linkHtmlDetailLudica.download = "dettaglio_ludica.html";
+        document.body.appendChild(linkHtmlDetailLudica);
+        linkHtmlDetailLudica.click();
+        document.body.removeChild(linkHtmlDetailLudica);
+    }, 2000);
 });
 
 document.getElementById('backToOrganizerHome').addEventListener('click', () => { 
@@ -723,9 +856,21 @@ document.getElementById('backToDashboardFromJudge').addEventListener('click', ()
 });
 
 async function initJudgeRoom() {
-    if(!dashboardData) await setupDashboardListener(); // Assicuriamoci di avere i dati
+    if(!dashboardData) await setupDashboardListener();
     showView('organizerJudgeListView');
-    renderJudgeList();
+    
+    if (judgeListUnsub) judgeListUnsub();
+    judgeListUnsub = onSnapshot(collection(db, `events/${currentEventId}/submissions`), (snap) => {
+        dashboardData.submissions = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        renderJudgeList();
+        
+        if (currentJudgeTeamId) {
+            const t = dashboardData.teams.find(t => t.id === currentJudgeTeamId);
+            const s = dashboardData.submissions.filter(s => s.teamId === currentJudgeTeamId);
+            const isJudgeDetailVisible = !document.getElementById('organizerJudgeDetailView').classList.contains('hidden');
+            if (t && isJudgeDetailVisible) renderJudgeDetail(t, dashboardData.checkpoints, s);
+        }
+    });
 }
 
 function renderJudgeList() {
@@ -849,14 +994,36 @@ function renderJudgeDetail(team, checkpoints, teamSubs) {
 
     window.toggleSubStatus = async (subId, newStatus) => {
         try {
-            const ref = doc(db, "submissions", subId);
-            if(newStatus) await updateDoc(ref, { status: newStatus });
-            else {
-                const currentData = (await getDoc(ref)).data();
-                const newData = { ...currentData };
+            const ref = doc(db, `events/${currentEventId}/submissions`, subId);
+            const snap = await getDoc(ref);
+            if (!snap.exists()) return;
+            const subData = snap.data();
+            const teamId = subData.teamId;
+
+            if(newStatus) {
+                await updateDoc(ref, { status: newStatus });
+            } else {
+                const newData = { ...subData };
                 delete newData.status;
                 await setDoc(ref, newData);
             }
+
+            const subSnap = await getDocs(query(collection(db, `events/${currentEventId}/submissions`), where("teamId", "==", teamId)));
+            
+            const subsMap = {};
+            subSnap.docs.forEach(d => {
+                const data = d.data();
+                subsMap[`${teamId}_${data.checkpointId}`] = data;
+            });
+
+            const { score, completed } = calculateScore(teamId, dashboardData.checkpoints, null, subsMap);
+
+            const statsRef = doc(db, `events/${currentEventId}/teamStats`, teamId);
+            await setDoc(statsRef, {
+                score: score,
+                completed: completed
+            }, { merge: true });
+
         } catch(e) { console.error("Update failed", e); }
     };
 }
@@ -930,6 +1097,7 @@ function startEditCheckpoint(id, data) {
     form.placeholder.value = data.placeholder || '';
     form.correctAnswer.value = data.correctAnswer || ''; 
     form.points.value = data.points;
+    form.isFinal.checked = data.isFinal || false;
     form.mapX.value = data.mapX || '';
     form.mapY.value = data.mapY || '';
 
@@ -950,6 +1118,20 @@ function startEditCheckpoint(id, data) {
     submitBtn.textContent = 'Salva Modifiche';
     submitBtn.classList.replace('btn-secondary', 'btn-primary');
     document.getElementById('cancelEditBtn').classList.remove('hidden');
+    // Mostra anteprima immagine esistente
+    const previewContainer = document.getElementById('cp-image-preview');
+    if (data.imageUrl) {
+        previewContainer.innerHTML = `
+            <div class="mt-2 relative inline-block">
+                <img src="${data.imageUrl}" class="h-32 rounded border border-gray-300 object-contain bg-gray-50">
+                <button type="button" id="removeImageBtn" class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold hover:bg-red-600 shadow">✕</button>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">Carica un nuovo file per sostituirla, oppure rimuovila con ✕</p>
+        `;
+        document.getElementById('removeImageBtn').addEventListener('click', () => removeCheckpointImage(document.getElementById('editCheckpointId').value, data.imageUrl));
+    } else {
+        previewContainer.innerHTML = '<p class="text-xs text-gray-400 mt-1">Nessuna immagine caricata.</p>';
+    }
     renderAdminMapMarkers();
 }
 
@@ -962,14 +1144,28 @@ function resetCheckpointForm() {
     document.getElementById('lbl-mapX').textContent = '-';
     document.getElementById('lbl-mapY').textContent = '-';
     document.getElementById('cpMapPin').classList.add('hidden');
+    document.getElementById('cp-image-preview').innerHTML = '';
 
     const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Aggiungi Punto';
     submitBtn.classList.replace('btn-primary', 'btn-secondary');
     document.getElementById('cancelEditBtn').classList.add('hidden');
+    form.isFinal.checked = false;
     const radioText = form.querySelector(`input[name="cpType"][value="text"]`);
     if(radioText) { radioText.checked = true; radioText.dispatchEvent(new Event('change')); }
     renderAdminMapMarkers();
+}
+
+async function removeCheckpointImage(checkpointId, imageUrl) {
+    showModal("Rimuovi Immagine", "Sei sicuro di voler rimuovere l'immagine da questo checkpoint?", true, async () => {
+        try {
+            await deleteObject(ref(storage, imageUrl)).catch(() => {});
+            await updateDoc(doc(db, `events/${currentEventId}/checkpoints`, checkpointId), { imageUrl: null });
+            document.getElementById('cp-image-preview').innerHTML = '<p class="text-xs text-gray-400 mt-1">Immagine rimossa.</p>';
+        } catch (e) {
+            showModal("Errore", "Impossibile rimuovere l'immagine: " + e.message);
+        }
+    });
 }
 
 document.getElementById('cancelEditBtn').addEventListener('click', resetCheckpointForm);
@@ -985,7 +1181,8 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
         question: form.question.value,
         description: form.description.value,
         points: parseInt(form.points.value),
-        cpType: cpType
+        cpType: cpType,
+        isFinal: form.isFinal.checked
     };
 
     if (form.mapX.value && form.mapY.value) {
@@ -1022,7 +1219,16 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
 });
 
 async function deleteCheckpoint(id) {
-    showModal("Elimina Punto", "Sei sicuro di voler eliminare questo punto di controllo? La rimozione non cancellerà le risposte già inviate dalle squadre per questo punto.", true, async () => {
+    const subsSnap = await getDocs(
+        query(collection(db, `events/${currentEventId}/submissions`), 
+              where("checkpointId", "==", id))
+    );
+    const subCount = subsSnap.size;
+    const warningText = subCount > 0 
+         ? `Attenzione: ${subCount} squadre hanno già risposto a questo punto. Le loro risposte NON verranno cancellate.\n\n` 
+         : '';
+         
+    showModal("Elimina Punto", `${warningText}Sei sicuro di voler eliminare questo punto di controllo?`, true, async () => {
         try {
             await deleteDoc(doc(db, `events/${currentEventId}/checkpoints`, id));
             await deleteObject(ref(storage, `checkpoints/${currentEventId}/${id}.jpg`)).catch(()=>{});
@@ -1275,14 +1481,37 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         }
 
         const submissionTimestamp = new Date();
-        const data = { eventId: currentEventId, teamId, checkpointId, answer, timestamp: submissionTimestamp };
+        const data = { teamId, checkpointId, answer, timestamp: submissionTimestamp };
         if(photoUrl) data.photoUrl = photoUrl;
 
         const submissionId = teamId + "_" + checkpointId;
-        await setDoc(doc(db, "submissions", submissionId), data);
+        await setDoc(doc(db, `events/${currentEventId}/submissions`, submissionId), data);
         await addDoc(collection(db, `events/${currentEventId}/activity`), {
             type: 'submit', teamId, checkpointId, answer, photoUrl, timestamp: submissionTimestamp
         });
+
+        const cpDoc = await getDoc(doc(db, `events/${currentEventId}/checkpoints`, checkpointId));
+        const cpData = cpDoc.exists() ? cpDoc.data() : {};
+
+        let pointsToAdd = 0;
+        if (cpType === 'selfie') {
+            pointsToAdd = cpData.points || 0;
+        } else if (cpData.correctAnswer && answer.toLowerCase().trim() === cpData.correctAnswer.toLowerCase().trim()) {
+            pointsToAdd = cpData.points || 0;
+        }
+
+        const statsRef = doc(db, `events/${currentEventId}/teamStats`, teamId);
+        const statsDoc = await getDoc(statsRef);
+        const currentStats = statsDoc.exists() ? statsDoc.data() : { score: 0, completed: 0 };
+
+        const isLocked = cpData.isFinal === true;
+
+        await setDoc(statsRef, {
+            score: (currentStats.score || 0) + pointsToAdd,
+            completed: (currentStats.completed || 0) + 1,
+            lastActivity: submissionTimestamp,
+            ...(isLocked && { isLocked: true })
+        }, { merge: true });
         
         showModal("Successo", "Risposta inviata!");
         showView('participantView');
@@ -1436,7 +1665,11 @@ document.getElementById('backToDashboardBtn').addEventListener('click', () => {
 document.getElementById('refreshDashboardBtn').addEventListener('click', async () => {
     const icon = document.querySelector('#refreshDashboardBtn i');
     icon.classList.add('animate-spin');
-    if (dashboardData) executeDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+    if (dashboardData) {
+        const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
+        dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateGridDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
+    }
     setTimeout(() => icon.classList.remove('animate-spin'), 500);
 });
 // Toggle Password
@@ -1468,8 +1701,9 @@ document.getElementById('joinEventForm').addEventListener('submit', async (e) =>
             email: auth.currentUser.email,
             category: category
         });
-        await updateDoc(doc(db, "users", currentUserId), { currentEventId: currentEventId });
-        localStorage.setItem('currentEventId-' + currentUserId, currentEventId);
+        await updateDoc(doc(db, "users", currentUserId), {
+            [`events.${currentEventId}`]: { joinedAt: new Date() }
+        });
         initParticipantLobbyView();
     } catch (e) { showModal("Errore", e.message); btn.disabled = false; }
 });
@@ -1499,11 +1733,24 @@ async function initParticipantView(teamId, isReadOnly=false) {
         }
     });
     try {
+        const statsDoc = await getDoc(doc(db, `events/${currentEventId}/teamStats`, teamId));
+        const isLocked = statsDoc.exists() && statsDoc.data().isLocked === true;
+        if (isLocked) isReadOnly = true;
+
         const tDoc = await getDoc(doc(db, `events/${currentEventId}/teams`, teamId));
         if(tDoc.exists()) document.getElementById('participant-team-name-display').textContent = `Squadra: ${tDoc.data().name}`;
-        document.getElementById('game-finished-banner').classList.toggle('hidden', !isReadOnly);
         
-        const subQ = query(collection(db, "submissions"), where("teamId", "==", teamId), where("eventId", "==", currentEventId));
+        const banner = document.getElementById('game-finished-banner');
+        if (banner) {
+            if (isLocked) {
+                banner.textContent = "🏆 Hai completato il percorso!";
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.toggle('hidden', !isReadOnly);
+            }
+        }
+        
+        const subQ = query(collection(db, `events/${currentEventId}/submissions`), where("teamId", "==", teamId));
         const cpSnap = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
         const checkpoints = cpSnap.docs.map(d=>({id:d.id, ...d.data()}));
         
@@ -1527,7 +1774,6 @@ async function initParticipantView(teamId, isReadOnly=false) {
         showView('participantView');
 
         participantSubsUnsub = onSnapshot(subQ, (snap) => {
-            console.log("Esecuzione listener sottomissioni"); // Inserisci questa riga per il test
             currentSubs = {};
             snap.forEach(d => currentSubs[d.data().checkpointId] = {id:d.id, ...d.data()});
 
@@ -1540,7 +1786,7 @@ async function initParticipantView(teamId, isReadOnly=false) {
                 if (!card) return;
 
                 if (isDone) {
-                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-green-500 text-white border-green-600';
+                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-blue-500 text-white border-blue-600';
                     iconContainer.innerHTML = cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-white"></i>' : '<div class="h-6 mb-1"></div>';
                     checkContainer.innerHTML = '<i data-lucide="check" class="mt-1 w-5 h-5 font-bold"></i>';
                 } else {
@@ -1553,9 +1799,70 @@ async function initParticipantView(teamId, isReadOnly=false) {
         });
     } catch(e) { console.error(e); }
 }
+async function initParticipantHomeView(eventIds) {
+    const eventsList = document.getElementById('participantEventsList');
+    if (!eventsList) return;
+    eventsList.innerHTML = '<p class="text-gray-500 text-center py-4">Caricamento eventi...</p>';
+    
+    try {
+        const promises = eventIds.map(id => getDoc(doc(db, "events", id)));
+        const docs = await Promise.all(promises);
+        
+        eventsList.innerHTML = '';
+        docs.forEach(eventDoc => {
+            if (eventDoc.exists()) {
+                const event = eventDoc.data();
+                const id = eventDoc.id;
+                
+                let statusBadge = '';
+                if (event.status === 'pending') {
+                    statusBadge = '<span class="bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded-full border border-yellow-200 font-bold">In Attesa</span>';
+                } else if (event.status === 'active') {
+                    statusBadge = '<span class="bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded-full border border-green-200 font-bold">In Corso</span>';
+                } else {
+                    statusBadge = '<span class="bg-gray-100 text-gray-800 text-xs px-2 py-0.5 rounded-full border border-gray-300 font-bold">Terminata</span>';
+                }
+                
+                const card = document.createElement('div');
+                card.className = 'p-4 bg-gray-50 rounded-lg border border-gray-200 flex justify-between items-center shadow-sm';
+                card.innerHTML = `
+                    <div>
+                        <h3 class="font-bold text-lg text-teal-900">${event.name}</h3>
+                        <div class="mt-1">${statusBadge}</div>
+                    </div>
+                    <div>
+                        <button class="enter-event-btn btn btn-primary px-4 py-2 text-sm shadow-sm">Entra</button>
+                    </div>
+                `;
+                
+                card.querySelector('.enter-event-btn').onclick = () => {
+                    currentEventId = id;
+                    if (event.status === 'active') {
+                        initParticipantView(currentUserId);
+                    } else if (event.status === 'pending') {
+                        initParticipantLobbyView();
+                    } else {
+                        initParticipantView(currentUserId, true);
+                    }
+                };
+                eventsList.appendChild(card);
+            }
+        });
+        
+        if (eventsList.children.length === 0) {
+            eventsList.innerHTML = '<p class="text-gray-500 text-center py-4">Nessun evento attivo trovato.</p>';
+        }
+    } catch (error) {
+        console.error("Errore nel caricamento degli eventi partecipante:", error);
+        eventsList.innerHTML = '<p class="text-red-500 text-center py-4">Errore nel caricamento.</p>';
+    }
+    
+    showView('participantHomeView');
+    lucide.createIcons({ root: document.getElementById('participantHomeView') });
+}
 async function deleteSubmission(subId, photoUrl) {
     showModal("Cancella", "Sicuro?", true, async () => {
-        await deleteDoc(doc(db, "submissions", subId));
+        await deleteDoc(doc(db, `events/${currentEventId}/submissions`, subId));
         if (photoUrl) {
             await deleteObject(ref(storage, photoUrl)).catch(()=>{});
         }
@@ -1567,6 +1874,7 @@ document.getElementById('backToGrid').addEventListener('click', () => showView('
 document.getElementById('logout-participant').addEventListener('click', () => { signOut(auth); });
 document.getElementById('logout-lobby').addEventListener('click', () => signOut(auth));
 document.getElementById('logout-join').addEventListener('click', () => signOut(auth));
+document.getElementById('logout-participant-home').addEventListener('click', () => signOut(auth));
 document.getElementById('closePhotoModalBtn').addEventListener('click', () => document.getElementById('photoModal').classList.add('hidden'));
 
 function showSubmissionDetail(submission, checkpoint, isCorrect, team) {
@@ -1755,11 +2063,14 @@ function renderMapPaths() {
     pathsContainer.appendChild(htmlOverlay);
 }
 
-document.getElementById('syncMapBtn').addEventListener('click', () => {
+document.getElementById('syncMapBtn').addEventListener('click', async () => {
     const icon = document.querySelector('#syncMapBtn i');
     icon.classList.add('animate-spin');
     
     if (dashboardData) {
+        const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
+        dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
         const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
         initMapTeamSelector(true);
         document.querySelectorAll('.map-team-cb').forEach(cb => {

@@ -119,6 +119,20 @@
             </div>
         </div>
 
+        <div id="participantHomeView" class="hidden max-w-md mx-auto bg-white p-6 rounded-lg shadow-md space-y-6">
+            <div class="flex justify-between items-center border-b pb-4">
+                <h2 class="text-2xl font-black text-teal-800">I tuoi eventi</h2>
+                <button id="logout-participant-home" class="p-2 text-red-600 hover:text-red-800" title="Logout">
+                    <i data-lucide="log-out"></i>
+                </button>
+            </div>
+            <div id="participantEventsList" class="space-y-3">
+                </div>
+            <div class="pt-4 border-t flex justify-center">
+                <button onclick="showView('joinEventView')" class="btn btn-secondary w-full py-2">Iscriviti a un nuovo evento</button>
+            </div>
+        </div>
+
         <div id="joinEventView" class="hidden flex items-center justify-center min-h-[80vh]">
             <div class="bg-white p-8 rounded-xl shadow-xl w-full max-w-md border-t-4 border-brand-orange">
                 <div class="flex justify-between items-center mb-8 border-b pb-4">
@@ -358,6 +372,10 @@
                                         <input type="radio" name="cpType" value="selfie" class="form-radio text-brand-orange w-5 h-5">
                                         <span class="font-bold text-gray-700">Selfie (Foto)</span>
                                     </label>
+                                    <div class="flex items-center space-x-2 py-2">
+                                        <input type="checkbox" id="cp-isFinal" name="isFinal" class="w-4 h-4 text-teal-600 focus:ring-teal-500 rounded">
+                                        <label for="cp-isFinal" class="text-sm font-medium text-gray-700">Questo è il checkpoint finale</label>
+                                    </div>
                                 </div>
                             </div>
 
@@ -400,6 +418,7 @@
                             <div>
                                 <label for="cp-image" class="block text-sm font-bold mb-1">Immagine (Opzionale)</label>
                                 <input type="file" id="cp-image" name="image" accept="image/*" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-brand-green file:text-white hover:file:bg-green-700">
+                                <div id="cp-image-preview" class="mt-2"></div>  <!-- ← riga da aggiungere -->
                             </div>
 
                             <input type="hidden" id="cp-mapX" name="mapX">
@@ -551,7 +570,7 @@
                 </div>
                 
                 <div class="flex flex-col lg:flex-row gap-6 flex-grow overflow-hidden">
-                    <div id="liveMapContainer" class="relative flex-grow bg-gray-100 border border-gray-300 rounded-lg overflow-hidden hidden min-h-[500px] flex items-center justify-center">
+                    <div id="liveMapContainer" class="bg-black relative flex-grow bg-gray-100 border border-gray-300 rounded-lg hidden min-h-[500px] flex items-center justify-center">
                         <button id="toggleFullscreenBtn" title="Schermo intero" class="absolute top-4 right-4 z-50 bg-white hover:bg-gray-100 text-gray-800 p-2 rounded shadow-md border border-gray-300 transition-colors">
                             <i data-lucide="maximize" class="w-5 h-5 pointer-events-none"></i>
                         </button>

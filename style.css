@@ -93,3 +93,11 @@ input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
     display: none;
 }
+
+:-webkit-full-screen #liveMapContainer,
+:-moz-full-screen #liveMapContainer,
+:fullscreen #liveMapContainer {
+    max-height: 100vh;
+    max-width: 100vw;
+    background-color: #000;
+}
