@@ -1459,6 +1459,7 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
     submitButton.disabled = true;
     submitButton.innerHTML = `<i data-lucide="loader-2" class="animate-spin mr-2"></i> Invio...`;
     
+    const isOffline = !navigator.onLine;
     const teamId = document.getElementById('teamIdInput').value;
     const checkpointId = document.getElementById('checkpointIdInput').value;
     const cpType = document.getElementById('checkpointTypeInput').value;
@@ -1466,9 +1467,19 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
     let answer = cpType === 'selfie' ? "(SELFIE)" : document.getElementById('answer').value;
     const photoFile = document.getElementById('photo').files[0];
 
-    if (cpType === 'selfie' && !photoFile) { 
-        showModal("Errore", "Il Selfie è obbligatorio!"); 
-        submitButton.disabled = false; return; 
+    if (cpType === 'selfie') {
+        if (!photoFile) {
+            showModal("Errore", "Il Selfie è obbligatorio!"); 
+            submitButton.disabled = false; 
+            submitButton.innerHTML = `INVIA RISPOSTA`;
+            return; 
+        }
+        if (isOffline) {
+            showModal("Connessione Assente", "Sei offline. Non è possibile caricare foto senza connessione internet. Avvicinati a una zona con copertura e riprova."); 
+            submitButton.disabled = false; 
+            submitButton.innerHTML = `INVIA RISPOSTA`;
+            return;
+        }
     }
 
     try {
@@ -1489,6 +1500,12 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         await addDoc(collection(db, `events/${currentEventId}/activity`), {
             type: 'submit', teamId, checkpointId, answer, photoUrl, timestamp: submissionTimestamp
         });
+
+        if (isOffline) {
+            showModal("Connessione Assente", "Sei offline — la tua risposta è stata salvata sul dispositivo e verrà sincronizzata automaticamente quando tornerai in copertura.");
+            showView('participantView');
+            return;
+        }
 
         const cpDoc = await getDoc(doc(db, `events/${currentEventId}/checkpoints`, checkpointId));
         const cpData = cpDoc.exists() ? cpDoc.data() : {};
@@ -1665,13 +1682,29 @@ document.getElementById('backToDashboardBtn').addEventListener('click', () => {
 document.getElementById('refreshDashboardBtn').addEventListener('click', async () => {
     const icon = document.querySelector('#refreshDashboardBtn i');
     icon.classList.add('animate-spin');
+    
     if (dashboardData) {
         const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
         dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        const subsMap = {};
+        dashboardData.submissions.forEach(s => {
+            subsMap[`${s.teamId}_${s.checkpointId}`] = s;
+        });
+
+        const batch = writeBatch(db);
+        dashboardData.teams.forEach(team => {
+            const { score, completed } = calculateScore(team.id, dashboardData.checkpoints, null, subsMap);
+            const statsRef = doc(db, `events/${currentEventId}/teamStats`, team.id);
+            batch.set(statsRef, { score, completed }, { merge: true });
+        });
+        await batch.commit();
+
         updateGridDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
     }
     setTimeout(() => icon.classList.remove('animate-spin'), 500);
 });
+
 // Toggle Password
 document.querySelectorAll('.toggle-password').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1751,8 +1784,20 @@ async function initParticipantView(teamId, isReadOnly=false) {
         }
         
         const subQ = query(collection(db, `events/${currentEventId}/submissions`), where("teamId", "==", teamId));
-        const cpSnap = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
-        const checkpoints = cpSnap.docs.map(d=>({id:d.id, ...d.data()}));
+        
+        let checkpoints = [];
+        try {
+            const cpSnap = await getDocs(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")));
+            checkpoints = cpSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            localStorage.setItem(`checkpoints_${currentEventId}`, JSON.stringify(checkpoints));
+        } catch (e) {
+            const cached = localStorage.getItem(`checkpoints_${currentEventId}`);
+            if (cached) {
+                checkpoints = JSON.parse(cached);
+            } else {
+                throw e; 
+            }
+        }
         
         let currentSubs = {};
         const grid = document.getElementById('checkpointsGrid');

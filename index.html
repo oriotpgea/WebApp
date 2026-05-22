@@ -260,10 +260,12 @@
             <div class="mt-6 bg-blue-50 border-l-4 border-blue-500 p-4 md:p-6 rounded-lg shadow-md">
                 <h3 class="text-lg font-bold text-blue-800 flex items-center mb-2">Monitoraggio Consumi Database</h3>
                 <ul class="list-disc pl-5 text-sm text-blue-900 space-y-2">
-                    <li><strong>Persistenza del Listener:</strong> Una volta aperta la dashboard, le nuove risposte consumano 1 lettura ciascuna in tempo reale. Questo accade in background in ogni vista (Mappa, Classifica, Giudici).</li>
-                    <li><strong>Costo del Refresh (F5):</strong> Ricaricare la pagina è l'operazione più costosa. Obbliga il sistema a scaricare nuovamente tutte le migliaia di risposte già salvate. Evita il refresh manuale.</li>
-                    <li><strong>Navigazione Interna:</strong> Spostarsi tra le schede tramite i tasti della dashboard non genera nuove query e non aumenta i costi. I dati sono già presenti nella memoria del browser.</li>
-                    <li><strong>Log Attività:</strong> Questa vista non è in tempo reale. Ogni apertura o aggiornamento manuale genera una query da 20 letture.</li>
+                    <li><strong>Apertura iniziale:</strong> All'apertura della dashboard — si attivano i listener su teams, checkpoints e teamStats. Sono rispettivamente ~100, ~55 e ~100 documenti. Costo ragionevole e inevitabile.</li>
+                    <li><strong>Durante la gara:</strong> La classifica si aggiorna automaticamente in tempo reale tramite il listener su teamStats, che riceve un update per ogni submission inviata da qualsiasi squadra. Questo è esattamente quello che vuoi: vedi la classifica muoversi senza pagare il costo di scaricare ogni risposta.</li>
+                    <li><strong>La griglia:</strong> aggiornala manualmente con il pulsante "Aggiorna" solo quando ti serve davvero, ad esempio a metà gara e verso la fine. Non tenerla aperta e non aggiornarla continuamente.</li>
+                    <li><strong>La sala giudici:</strong> aprila solo se devi validare qualcosa. Tiene un listener sulle submissions attivo finché ci sei dentro, quindi entra, fai quello che devi, e torna alla dashboard.</li>
+                    <li><strong>Il live tracking:</strong> usa il pulsante "Sincronizza" manualmente, non stare lì ad aspettare aggiornamenti automatici. Una volta ogni 10-15 minuti è più che sufficiente per avere un'idea della distribuzione delle squadre.</li>
+                    <li><strong>Il log attività:</strong> evitalo durante la gara, serve più per analisi post-evento. Ogni apertura costa 20 letture.</li>
                 </ul>
             </div>
         </div>
