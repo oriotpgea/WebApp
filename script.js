@@ -30,6 +30,8 @@ function showView(viewId) {
     if (viewToShow) viewToShow.classList.remove('hidden');
     window.scrollTo(0, 0);
 }
+// Esposta globalmente per i chiamanti inline nell'HTML (ES module non espone automaticamente)
+window.showView = showView;
 
 let currentEventId = null;
 let currentUserRole = null;
@@ -40,6 +42,7 @@ let activityLogUnsub = null;
 let unsubscribeDashboard = null;
 let unsubscribeTeams = null;
 let unsubscribeCheckpoints = null;
+let unsubscribeEventStatus = null;
 let organizerHomeUnsub = null;
 let organizerTeamsUnsub = null;
 let organizerAdminUnsub = null;
@@ -194,24 +197,27 @@ async function setupDashboardListener() {
         const eventRef = doc(db, "events", currentEventId);
         const eventDoc = await getDoc(eventRef);
         
-        // script.js - All'interno di setupDashboardListener()
         if (eventDoc.exists()) {
             const eventData = eventDoc.data();
             
             dashboardData = {
-                eventName: eventData.name, // Inserire qui
+                eventName: eventData.name,
                 checkpoints: [],
                 teams: [],
                 submissions: []
             };
 
-            const badge = document.getElementById('dashboardEventStatus');
-            if (badge) {
-                const st = eventData.status;
-                if (st === 'pending') badge.innerHTML = '<span class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-bold border border-yellow-200">In Attesa</span>';
-                else if (st === 'active') badge.innerHTML = '<span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-bold border border-green-200">In Corso</span>';
-                else badge.innerHTML = '<span class="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-bold border border-gray-300">Terminata</span>';
-            }
+            // FIX BUG 2: listener live sul documento evento per aggiornare il badge stato in tempo reale
+            unsubscribeEventStatus = onSnapshot(eventRef, (snap) => {
+                if (!snap.exists()) return;
+                const st = snap.data().status;
+                const badge = document.getElementById('dashboardEventStatus');
+                if (badge) {
+                    if (st === 'pending') badge.innerHTML = '<span class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-bold border border-yellow-200">In Attesa</span>';
+                    else if (st === 'active') badge.innerHTML = '<span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-bold border border-green-200">In Corso</span>';
+                    else badge.innerHTML = '<span class="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-bold border border-gray-300">Terminata</span>';
+                }
+            });
             
             unsubscribeTeams = onSnapshot(collection(db, `events/${currentEventId}/teams`), (snap) => {
                 dashboardData.teams = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -222,9 +228,18 @@ async function setupDashboardListener() {
                 }
             });
 
-            unsubscribeCheckpoints = onSnapshot(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")), (snap) => {
+            unsubscribeCheckpoints = onSnapshot(query(collection(db, `events/${currentEventId}/checkpoints`), orderBy("number")), async (snap) => {
+                const isFirstLoad = dashboardData.checkpoints.length === 0;
                 dashboardData.checkpoints = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderOrganizerUI(eventData, dashboardData.teams, dashboardData.checkpoints);
+
+                // FIX BUG 3: al primo caricamento dei checkpoint, recupera le submission (che prima
+                // arrivavano troppo presto, quando checkpoints era ancora [])
+                if (isFirstLoad) {
+                    const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
+                    dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                }
+
                 const dashboardView = document.getElementById('organizerDashboardView');
                 if (!dashboardView.classList.contains('hidden')) {
                     updateDashboardDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
@@ -254,11 +269,6 @@ async function setupDashboardListener() {
                 }
             });
 
-            const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
-            dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (!document.getElementById('organizerDashboardView').classList.contains('hidden')) {
-                updateGridDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
-            }
         }
     } catch (error) { showModal("Errore Dashboard", error.message); }
 }
@@ -844,6 +854,7 @@ document.getElementById('backToOrganizerHome').addEventListener('click', () => {
     if(unsubscribeDashboard) { unsubscribeDashboard(); unsubscribeDashboard = null; }
     if(unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
     if(unsubscribeCheckpoints) { unsubscribeCheckpoints(); unsubscribeCheckpoints = null; }
+    if(unsubscribeEventStatus) { unsubscribeEventStatus(); unsubscribeEventStatus = null; }
     currentEventId = null; 
     showView('organizerHomeView'); 
 });
@@ -1680,7 +1691,7 @@ document.getElementById('backToDashboardBtn').addEventListener('click', () => {
 });
 
 document.getElementById('refreshDashboardBtn').addEventListener('click', async () => {
-    const icon = document.querySelector('#refreshDashboardBtn i');
+    const icon = document.getElementById('refreshDashboardBtn');
     icon.classList.add('animate-spin');
     
     if (dashboardData) {
@@ -1700,6 +1711,11 @@ document.getElementById('refreshDashboardBtn').addEventListener('click', async (
         });
         await batch.commit();
 
+        // FIX: assicurarsi che la griglia esista prima di aggiornare le celle
+        const eventDoc = await getDoc(doc(db, "events", currentEventId));
+        if (eventDoc.exists()) {
+            renderOrganizerUI(eventDoc.data(), dashboardData.teams, dashboardData.checkpoints);
+        }
         updateGridDOM(dashboardData.teams, dashboardData.checkpoints, dashboardData.submissions);
     }
     setTimeout(() => icon.classList.remove('animate-spin'), 500);
@@ -1961,10 +1977,18 @@ document.getElementById('liveMapBtn').addEventListener('click', async () => {
     container.classList.remove('hidden');
     sidebar.classList.remove('hidden');
     noData.classList.add('hidden');
-    document.getElementById('liveMapBase').src = mapUrl;
-    
+
+    const mapImg = document.getElementById('liveMapBase');
     initMapTeamSelector();
-    renderLiveMap();
+
+    // FIX: aspettare che l'immagine sia caricata prima di renderizzare marker e percorsi,
+    // altrimenti il contenitore ha dimensioni 0 e i layer sovrapposti sono invisibili
+    if (mapImg.src === mapUrl && mapImg.complete) {
+        renderLiveMap();
+    } else {
+        mapImg.onload = () => renderLiveMap();
+        mapImg.src = mapUrl;
+    }
 });
 
 function initMapTeamSelector(preserveSelection = false) {
@@ -2109,19 +2133,38 @@ function renderMapPaths() {
 }
 
 document.getElementById('syncMapBtn').addEventListener('click', async () => {
-    const icon = document.querySelector('#syncMapBtn i');
+    const icon = document.getElementById('syncMapBtn');
     icon.classList.add('animate-spin');
     
     if (dashboardData) {
         const subSnap = await getDocs(collection(db, `events/${currentEventId}/submissions`));
         dashboardData.submissions = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+        // FIX: salvare i team selezionati, ricreare il selettore, ripristinare la selezione
+        // e solo DOPO chiamare renderLiveMap (che legge i checkbox checked)
         const checkedTeams = Array.from(document.querySelectorAll('.map-team-cb:checked')).map(cb => cb.value);
         initMapTeamSelector(true);
         document.querySelectorAll('.map-team-cb').forEach(cb => {
             cb.checked = checkedTeams.includes(cb.value);
         });
-        renderLiveMap();
+        // Chiamare renderMapPaths direttamente per evitare il guard sulla hidden view
+        // (la view è visibile ma il guard potrebbe avere falsi positivi)
+        const staticContainer = document.getElementById('liveMapStaticMarkers');
+        staticContainer.innerHTML = '';
+        dashboardData.checkpoints.forEach(cp => {
+            if (!cp.mapX || !cp.mapY) return;
+            const marker = document.createElement('div');
+            marker.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow flex items-center justify-center font-bold text-white bg-gray-800 opacity-80';
+            marker.style.left = `${cp.mapX}%`;
+            marker.style.top = `${cp.mapY}%`;
+            marker.style.width = '18px';
+            marker.style.height = '18px';
+            marker.style.zIndex = '1';
+            marker.style.fontSize = '11px';
+            marker.textContent = cp.number;
+            staticContainer.appendChild(marker);
+        });
+        renderMapPaths();
     }
     setTimeout(() => icon.classList.remove('animate-spin'), 500);
 });
