@@ -1185,6 +1185,24 @@ document.getElementById('addCheckpointForm').addEventListener('submit', async (e
     e.preventDefault();
     const form = e.target;
     const cpType = form.querySelector('input[name="cpType"]:checked').value;
+    const checkpointIdBeingEdited = document.getElementById('editCheckpointId').value;
+
+    if (form.isFinal.checked) {
+        const existingFinal = adminCheckpointsData.find(cp => cp.isFinal && cp.id !== checkpointIdBeingEdited);
+        if (existingFinal) {
+            const proceed = await new Promise(resolve => {
+                showModal(
+                    "Punto finale già presente",
+                    `Il punto #${existingFinal.number} è già impostato come punto finale. Vuoi che diventi questo al suo posto?`,
+                    true,
+                    () => resolve(true)
+                );
+                modalCancelBtn.addEventListener('click', () => resolve(false), { once: true });
+            });
+            if (!proceed) return;
+            await updateDoc(doc(db, `events/${currentEventId}/checkpoints`, existingFinal.id), { isFinal: false });
+        }
+    }
     
     const data = {
         number: parseInt(form.number.value),
@@ -1280,10 +1298,11 @@ document.getElementById('manageCpBtn').addEventListener('click', async () => {
             const id = doc.id;
             adminCheckpointsData.push({ id, ...cp });
             const item = document.createElement('div');
-            item.className = 'p-3 bg-gray-100 rounded-md flex justify-between items-center';
             const locIcon = (cp.mapX && cp.mapY) ? '<i data-lucide="map-pin" class="w-4 h-4 text-green-600 inline ml-2"></i>' : '';
+            const finalIcon = cp.isFinal ? '<i data-lucide="flag" title="Punto Finale" class="w-4 h-4 text-red-600 inline ml-2"></i>' : '';
             const cpName = cp.name ? ` - ${cp.name}` : '';
-            item.innerHTML = `<div><p class="font-bold">#${cp.number}${cpName} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.) ${locIcon}</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
+            item.className = `p-3 rounded-md flex justify-between items-center ${cp.isFinal ? 'bg-red-50 border border-red-200' : 'bg-gray-100'}`;
+            item.innerHTML = `<div><p class="font-bold">#${cp.number}${cpName} - ${cp.cpType === 'selfie' ? '📷 Selfie' : '📝 Domanda'} (${cp.points} pt.) ${locIcon}${finalIcon}</p><p class="text-sm text-gray-600">${cp.question}</p></div><div class="flex space-x-2"><button title="Modifica" class="edit-btn p-2 text-blue-600 hover:text-blue-800"><i data-lucide="pencil" class="pointer-events-none"></i></button><button title="Elimina" class="delete-btn p-2 text-red-600 hover:text-red-800"><i data-lucide="trash-2" class="pointer-events-none"></i></button></div>`;
             item.querySelector('.edit-btn').addEventListener('click', () => startEditCheckpoint(id, cp));
             item.querySelector('.delete-btn').addEventListener('click', () => deleteCheckpoint(id));
             checkpointsList.appendChild(item);
@@ -1385,7 +1404,14 @@ async function openCheckpoint(checkpoint, teamId, isCompleted, submission, isRea
     ` : '';
 
     const titleText = checkpoint.name ? `${checkpoint.name} #${checkpoint.number}` : `Punto #${checkpoint.number}`;
+    const finalWarningHtml = checkpoint.isFinal ? `
+        <div class="mb-4 bg-red-50 border-2 border-red-400 text-red-800 p-4 rounded-lg font-bold flex items-center gap-3 shadow-sm">
+            <i data-lucide="flag" class="w-6 h-6 flex-shrink-0"></i>
+            <span>QUESTO È L'ULTIMO PUNTO. Aprendolo hai già bloccato tutti gli altri punti.</span>
+        </div>
+    ` : '';
     document.getElementById('checkpointDetail').innerHTML = `
+        ${finalWarningHtml}
         ${imageUrlHtml}
         <h2 class="text-2xl font-bold mb-2 flex items-center">${titleText} ${typeLabel}</h2>
         <p class="text-lg bg-gray-100 p-4 rounded-md font-medium text-gray-800 shadow-inner">${checkpoint.question}</p>
@@ -1772,32 +1798,45 @@ async function initParticipantView(teamId, isReadOnly=false) {
     if (participantListenerUnsub) participantListenerUnsub();
     if (participantSubsUnsub) participantSubsUnsub();
     
+    let eventIsFinished = false; // aggiornato in tempo reale dal listener sotto
+    // Placeholder: la funzione vera viene assegnata più sotto, appena disponibili
+    // tutte le variabili necessarie. Il listener qui sotto può scattare PRIMA che
+    // quel punto del codice venga eseguito, quindi serve già un riferimento valido.
+    let refreshLockBanner = () => {};
+
     participantListenerUnsub = onSnapshot(doc(db, "events", currentEventId), (docSnap) => {
         if (docSnap.exists()) {
-            const isFinished = docSnap.data().status === 'finished';
-            const banner = document.getElementById('game-finished-banner');
-            if (banner) banner.classList.toggle('hidden', !isFinished);
+            eventIsFinished = docSnap.data().status === 'finished';
             const submitBtn = document.querySelector('#submissionForm button[type="submit"]');
-            if (submitBtn) submitBtn.classList.toggle('hidden', isFinished);
+            if (submitBtn) submitBtn.classList.toggle('hidden', eventIsFinished);
+            refreshLockBanner();
         }
     });
     try {
         const statsDoc = await getDoc(doc(db, `events/${currentEventId}/teamStats`, teamId));
         const isLocked = statsDoc.exists() && statsDoc.data().isLocked === true;
-        if (isLocked) isReadOnly = true;
+        // finalLockTriggered: true appena il concorrente ha APERTO (non necessariamente risposto)
+        // il punto finale. Blocca tutte le altre card, ma NON quella finale stessa finché non è compilata.
+        let finalLockTriggered = isLocked;
 
         const tDoc = await getDoc(doc(db, `events/${currentEventId}/teams`, teamId));
         if(tDoc.exists()) document.getElementById('participant-team-name-display').textContent = `Squadra: ${tDoc.data().name}`;
         
         const banner = document.getElementById('game-finished-banner');
-        if (banner) {
-            if (isLocked) {
-                banner.textContent = "🏆 Hai completato il percorso!";
+        refreshLockBanner = function() {
+            if (!banner) return;
+            if (eventIsFinished) {
+                // La gara terminata è lo stato definitivo: prevale su tutto, anche sul blocco da punto finale.
+                banner.textContent = "⚠️ GARA TERMINATA - MODALITÀ SOLA LETTURA";
+                banner.classList.remove('hidden');
+            } else if (finalLockTriggered) {
+                banner.textContent = "🏁 Hai aperto il punto finale: tutti gli altri punti sono bloccati.";
                 banner.classList.remove('hidden');
             } else {
-                banner.classList.toggle('hidden', !isReadOnly);
+                banner.classList.add('hidden');
             }
-        }
+        };
+        refreshLockBanner();
         
         const subQ = query(collection(db, `events/${currentEventId}/submissions`), where("teamId", "==", teamId));
         
@@ -1819,18 +1858,85 @@ async function initParticipantView(teamId, isReadOnly=false) {
         const grid = document.getElementById('checkpointsGrid');
         grid.innerHTML = '';
 
+        const existingWarn = document.getElementById('final-cp-header-warning');
+        if (existingWarn) existingWarn.remove();
+
+        function applyFinalLockVisuals() {
+            checkpoints.forEach(cp => {
+                if (cp.isFinal) return;
+                const isDone = !!currentSubs[cp.id];
+                if (isDone) return; // le card già completate restano come sono (blu)
+                const card = document.getElementById(`cp-card-${cp.id}`);
+                if (!card) return;
+                card.style.cursor = 'not-allowed';
+                if (!card.querySelector('.lock-badge')) {
+                    const numberEl = card.querySelector('span.text-3xl');
+                    const lockBadge = document.createElement('i');
+                    lockBadge.setAttribute('data-lucide', 'lock');
+                    lockBadge.className = 'lock-badge w-4 h-4 text-gray-500 ml-1 inline-block align-middle pointer-events-none';
+                    if (numberEl) {
+                        numberEl.insertAdjacentElement('afterend', lockBadge);
+                    } else {
+                        card.appendChild(lockBadge);
+                    }
+                    lucide.createIcons({ root: card });
+                }
+            });
+        }
+
+        async function triggerFinalLock(teamId) {
+            finalLockTriggered = true;
+            refreshLockBanner();
+            applyFinalLockVisuals();
+            try {
+                await setDoc(doc(db, `events/${currentEventId}/teamStats`, teamId), { isLocked: true }, { merge: true });
+            } catch (e) { console.error("Impossibile salvare il blocco:", e); }
+        }
+
         checkpoints.forEach(cp => {
             const card = document.createElement('div');
             card.id = `cp-card-${cp.id}`;
-            card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
+            card.className = 'relative p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
+            const finalBadge = cp.isFinal ? `<div class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1.5 shadow-md border-2 border-white z-10" title="Punto Finale"><i data-lucide="flag" class="w-4 h-4 pointer-events-none"></i></div>` : '';
             card.innerHTML = `
+                ${finalBadge}
                 <div id="cp-icon-${cp.id}">${cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-brand-orange"></i>' : '<div class="h-6 mb-1"></div>'}</div>
                 <span class="text-3xl font-black">${cp.number}</span>
                 <div id="cp-check-${cp.id}"></div>
             `;
-            card.onclick = () => openCheckpoint(cp, teamId, !!currentSubs[cp.id], currentSubs[cp.id], isReadOnly);
+            card.onclick = () => {
+                const isDone = !!currentSubs[cp.id];
+                // Una volta scattato il blocco, tutte le card diverse dalla finale sono
+                // di sola lettura, a prescindere da cosa fosse isReadOnly al caricamento.
+                const effectiveReadOnly = isReadOnly || (finalLockTriggered && !cp.isFinal);
+
+                if (cp.isFinal && !isDone && !effectiveReadOnly) {
+                    showModal(
+                        "⚠️ Attenzione, punto finale",
+                        "Questo è l'ULTIMO punto del percorso. Aprendolo, tutti gli altri punti verranno bloccati subito, anche prima di rispondere qui. Sei sicuro di voler procedere?",
+                        true,
+                        () => {
+                            setTimeout(() => {
+                                showModal(
+                                    "🤔 Ma sei PROPRIO sicuro?",
+                                    "Ultimissimo avviso, eh. Non c'è un tasto 'annulla tutto', non c'è un mago che torna indietro nel tempo. Aprendo questo punto, gli altri si bloccano SUBITO. Confermi definitivamente?",
+                                    true,
+                                    () => {
+                                        triggerFinalLock(teamId);
+                                        openCheckpoint(cp, teamId, isDone, currentSubs[cp.id], false);
+                                    }
+                                );
+                            }, 0);
+                        }
+                    );
+                } else {
+                    openCheckpoint(cp, teamId, isDone, currentSubs[cp.id], effectiveReadOnly);
+                }
+            };
             grid.appendChild(card);
         });
+
+        if (finalLockTriggered) applyFinalLockVisuals();
         lucide.createIcons({ root: grid });
         showView('participantView');
 
@@ -1847,11 +1953,11 @@ async function initParticipantView(teamId, isReadOnly=false) {
                 if (!card) return;
 
                 if (isDone) {
-                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-blue-500 text-white border-blue-600';
+                    card.className = 'relative p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-blue-500 text-white border-blue-600';
                     iconContainer.innerHTML = cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-white"></i>' : '<div class="h-6 mb-1"></div>';
                     checkContainer.innerHTML = '<i data-lucide="check" class="mt-1 w-5 h-5 font-bold"></i>';
                 } else {
-                    card.className = 'p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
+                    card.className = 'relative p-3 rounded-lg shadow-md flex flex-col items-center justify-center h-28 border-2 transition-all cursor-pointer transform hover:scale-105 bg-white text-gray-800 border-gray-100 hover:border-brand-orange';
                     iconContainer.innerHTML = cp.cpType === 'selfie' ? '<i data-lucide="camera" class="w-6 h-6 mb-1 text-brand-orange"></i>' : '<div class="h-6 mb-1"></div>';
                     checkContainer.innerHTML = '';
                 }
