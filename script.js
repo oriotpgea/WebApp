@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch, limit, startAfter} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, addDoc, onSnapshot, collection, query, where, getDocs, orderBy, updateDoc, deleteDoc, writeBatch, limit, startAfter, increment} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -1555,14 +1555,11 @@ document.getElementById('submissionForm').addEventListener('submit', async (e) =
         }
 
         const statsRef = doc(db, `events/${currentEventId}/teamStats`, teamId);
-        const statsDoc = await getDoc(statsRef);
-        const currentStats = statsDoc.exists() ? statsDoc.data() : { score: 0, completed: 0 };
-
         const isLocked = cpData.isFinal === true;
 
         await setDoc(statsRef, {
-            score: (currentStats.score || 0) + pointsToAdd,
-            completed: (currentStats.completed || 0) + 1,
+            score: increment(pointsToAdd),
+            completed: increment(1),
             lastActivity: submissionTimestamp,
             ...(isLocked && { isLocked: true })
         }, { merge: true });
